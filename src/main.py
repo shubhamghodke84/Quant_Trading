@@ -146,6 +146,15 @@ class TradingSystem:
             )
             self.logger.info("✓ Data engine ready")
             
+            # 3b. Preload historical bars from yfinance (eliminates 22+ min startup delay)
+            self.logger.info("   Preloading historical bars...")
+            try:
+                preload_results = self.data_engine.preload_historical_bars(bars_count=200)
+                for sym, count in preload_results.items():
+                    self.logger.info(f"   ✓ {sym}: {count} bars preloaded")
+            except Exception as e:
+                self.logger.warning(f"   ⚠ Preload failed (will build from live ticks): {e}")
+            
             # 4. Initialize risk engine
             self.logger.info("4. Initializing risk engine...")
             self.risk_engine = RiskEngine(self.config)
@@ -395,7 +404,16 @@ class TradingSystem:
         try:
             # Get current account state
             account_info = self._get_effective_account_info()
-            positions = self.portfolio_engine.get_all_positions()
+            
+            # CRITICAL: Get positions directly from MT5 (live source of truth)
+            # Portfolio engine's internal list can be stale between reconciliation cycles,
+            # causing the one-direction check to miss existing positions
+            try:
+                mt5_positions = self.connector.get_positions()
+            except Exception:
+                # Fallback to portfolio engine if MT5 fetch fails
+                mt5_positions = {str(p.position_id): p for p in self.portfolio_engine.get_all_positions()}
+            
             daily_pnl = self.portfolio_engine.daily_realized_pnl + self.portfolio_engine.get_total_unrealized_pnl()
             
             # Submit signal to execution engine
@@ -403,7 +421,7 @@ class TradingSystem:
                 signal=signal,
                 account_balance=account_info['balance'],
                 account_equity=account_info['equity'],
-                current_positions={str(p.position_id): p for p in positions},
+                current_positions=mt5_positions,
                 daily_pnl=daily_pnl
             )
             

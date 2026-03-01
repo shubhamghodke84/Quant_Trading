@@ -81,6 +81,12 @@ class ExposureManager:
         max_exposure = account_equity * self.max_exposure_pct
         
         if total_exposure > max_exposure:
+            # Allow min_lot if no existing exposure and order is at minimum size.
+            # On small accounts (e.g. $154) with high-priced instruments (BTCUSD $66k),
+            # even 0.01 lots exceeds any reasonable %-based limit, making trading impossible.
+            if current_exposure == 0 and new_order.quantity <= symbol.min_lot:
+                return True, "OK (min_lot override for small account)"
+            
             # Calculate percentage for error message
             if account_equity > 0:
                 exposure_pct = (total_exposure / account_equity) * 100
@@ -137,5 +143,11 @@ class ExposureManager:
         
         # Round down to lot step
         max_lots = (max_lots_raw / symbol.lot_step).quantize(Decimal("1"), rounding=ROUND_DOWN) * symbol.lot_step
+        
+        # If remaining exposure exists but rounds to 0 lots due to lot step,
+        # allow min_lot for small accounts on high-priced instruments (e.g. $200 on BTCUSD).
+        # Without this, no trade can ever be placed.
+        if max_lots == 0 and remaining_exposure > 0:
+            max_lots = symbol.min_lot
         
         return max(Decimal("0"), max_lots)

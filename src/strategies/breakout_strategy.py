@@ -147,7 +147,8 @@ class BreakoutStrategy(BaseStrategy):
                 volume_ratio = current_volume / avg_volume
                 volume_ok = volume_ratio >= self.volume_ratio_min
             else:
-                volume_ok = False
+                # No volume data available (e.g. file bridge) — skip check
+                volume_ok = True
         
         # --- Check for bullish breakout ---
         # KEY CHANGE: Require CLOSE above channel (not just wick/high)

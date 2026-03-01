@@ -210,13 +210,36 @@ class MT5Connector:
              logger.info("Using mapped symbol for order: %s -> %s", symbol, mapped_symbol)
         
         try:
+            # Round SL/TP to 2 decimal places (broker requirement)
+            rounded_sl = round(float(stop_loss), 2) if stop_loss else None
+            rounded_tp = round(float(take_profit), 2) if take_profit else None
+            rounded_price = round(float(price), 2) if price else None
+            
+            # Enforce minimum stops distance (brokers reject SL/TP too close to entry)
+            min_stops_distance = 1.0  # $1.00 minimum for BTCUSD
+            if rounded_price and rounded_sl:
+                if abs(rounded_price - rounded_sl) < min_stops_distance:
+                    if side == OrderSide.BUY:
+                        rounded_sl = round(rounded_price - min_stops_distance, 2)
+                    else:
+                        rounded_sl = round(rounded_price + min_stops_distance, 2)
+                    logger.warning("SL adjusted to meet minimum distance: %s", rounded_sl)
+            
+            if rounded_price and rounded_tp:
+                if abs(rounded_price - rounded_tp) < min_stops_distance:
+                    if side == OrderSide.BUY:
+                        rounded_tp = round(rounded_price + min_stops_distance, 2)
+                    else:
+                        rounded_tp = round(rounded_price - min_stops_distance, 2)
+                    logger.warning("TP adjusted to meet minimum distance: %s", rounded_tp)
+            
             response = self.client.place_order(
                 symbol=mapped_symbol,
                 order_type=side.value,
                 volume=float(quantity),
-                price=float(price) if price else None,
-                sl=float(stop_loss) if stop_loss else None,
-                tp=float(take_profit) if take_profit else None,
+                price=rounded_price,
+                sl=rounded_sl,
+                tp=rounded_tp,
                 comment=comment
             )
             logger.debug("Order response: %s", response)
@@ -385,6 +408,17 @@ class MT5Connector:
         else:
             side = PositionSide.SHORT
         
+        # Extract strategy from comment (format: "strategy|orderId" or "Order-id")
+        comment = mt5_pos.get('comment', '')
+        strategy = 'unknown'
+        order_id_prefix = ''
+        if '|' in comment:
+            parts = comment.split('|', 1)
+            strategy = parts[0]
+            order_id_prefix = parts[1] if len(parts) > 1 else ''
+        elif comment.startswith('Order-'):
+            order_id_prefix = comment.replace('Order-', '')
+        
         position = Position(
             symbol=symbol,
             side=side,
@@ -397,7 +431,9 @@ class MT5Connector:
             metadata={
                 'mt5_ticket': mt5_pos.get('ticket'),
                 'mt5_magic': mt5_pos.get('magic'),
-                'mt5_comment': mt5_pos.get('comment')
+                'mt5_comment': comment,
+                'strategy': strategy,
+                'order_id_prefix': order_id_prefix
             }
         )
         

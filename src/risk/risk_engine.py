@@ -294,13 +294,23 @@ class RiskEngine:
                 max_risk = account_balance * self.risk_per_trade_pct
                 
                 if risk_amount > max_risk:
-                    reason = f"Risk per trade exceeded: ${risk_amount} > ${max_risk}"
-                    self.logger.warning(
-                        "Order rejected - risk per trade",
-                        risk_amount=float(risk_amount),
-                        max_risk=float(max_risk)
-                    )
-                    return False, reason
+                    # Allow min_lot orders through — the minimum possible trade shouldn't be blocked
+                    if order.symbol and order.quantity <= order.symbol.min_lot:
+                        self.logger.warning(
+                            "Risk per trade exceeded but allowing min_lot",
+                            risk_amount=float(risk_amount),
+                            max_risk=float(max_risk),
+                            quantity=float(order.quantity),
+                            symbol=order.symbol.ticker
+                        )
+                    else:
+                        reason = f"Risk per trade exceeded: ${risk_amount} > ${max_risk}"
+                        self.logger.warning(
+                            "Order rejected - risk per trade",
+                            risk_amount=float(risk_amount),
+                            max_risk=float(max_risk)
+                        )
+                        return False, reason
             
             # All checks passed
             self.logger.info(

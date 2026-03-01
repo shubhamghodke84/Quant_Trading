@@ -67,6 +67,15 @@ class TradeJournal:
             exit_reason: Why position was closed
         """
         try:
+            # Deduplicate: skip if this mt5_ticket was already recorded
+            mt5_ticket = position.metadata.get('mt5_ticket') if position.metadata else None
+            if mt5_ticket and self._is_ticket_recorded(str(mt5_ticket)):
+                self.logger.debug(
+                    "Trade already recorded, skipping duplicate",
+                    mt5_ticket=str(mt5_ticket)
+                )
+                return
+            
             trade_record = {
                 'trade_id': str(position.position_id),
                 'symbol': position.symbol.ticker,
@@ -97,7 +106,8 @@ class TradeJournal:
                 
                 # Metadata
                 'regime': position.metadata.get('regime', 'unknown'),
-                'signal_strength': position.metadata.get('signal_strength', 0)
+                'signal_strength': position.metadata.get('signal_strength', 0),
+                'mt5_ticket': str(position.metadata.get('mt5_ticket', '')) if position.metadata else ''
             }
             
             # Append to CSV
@@ -201,7 +211,7 @@ class TradeJournal:
             'exit_time', 'exit_price', 'exit_reason',
             'realized_pnl', 'pnl_pct',
             'stop_loss', 'take_profit', 'initial_risk',
-            'duration_seconds', 'regime', 'signal_strength'
+            'duration_seconds', 'regime', 'signal_strength', 'mt5_ticket'
         ]
         
         with open(self.journal_file, 'w', newline='') as f:
@@ -213,3 +223,17 @@ class TradeJournal:
         with open(self.journal_file, 'a', newline='') as f:
             writer = csv.DictWriter(f, fieldnames=trade_record.keys())
             writer.writerow(trade_record)
+    
+    def _is_ticket_recorded(self, mt5_ticket: str) -> bool:
+        """Check if a trade with this MT5 ticket has already been recorded."""
+        if not self.journal_file.exists():
+            return False
+        try:
+            with open(self.journal_file, 'r') as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    if row.get('mt5_ticket') == mt5_ticket:
+                        return True
+        except Exception:
+            pass
+        return False

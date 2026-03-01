@@ -130,7 +130,8 @@ class MomentumStrategy(BaseStrategy):
                 volume_ratio = current_volume / avg_volume
                 volume_ok = volume_ratio >= self.volume_ratio_min
             else:
-                volume_ok = False
+                # No volume data available (e.g. file bridge) — skip check
+                volume_ok = True
         
         # --- Check for bullish momentum confluence ---
         rsi_bullish = current_rsi > self.rsi_bull_threshold

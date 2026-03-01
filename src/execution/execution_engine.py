@@ -110,6 +110,25 @@ class ExecutionEngine:
         try:
             signal_id = str(signal.signal_id)
             
+            # 0. ONE-DIRECTION ONLY: Reject signals opposite to existing positions
+            #    Prevents hedging (simultaneous BUY + SELL) which can blow the account
+            if signal.symbol and current_positions:
+                for pos in current_positions.values():
+                    if pos.symbol and pos.symbol.ticker == signal.symbol.ticker and not pos.is_flat:
+                        # BUY signal conflicts with SHORT position, SELL conflicts with LONG
+                        signal_is_buy = signal.side == OrderSide.BUY
+                        position_is_long = pos.is_long
+                        
+                        if signal_is_buy != position_is_long:
+                            self.logger.warning(
+                                "Signal rejected - opposite direction to existing position",
+                                signal_side=signal.side.value,
+                                existing_side=pos.side.value,
+                                symbol=signal.symbol.ticker,
+                                strategy=signal.strategy_name
+                            )
+                            return None
+            
             # 1. Calculate position size
             if not signal.entry_price or not signal.stop_loss:
                 self.logger.error(
@@ -242,7 +261,7 @@ class ExecutionEngine:
                 price=order.price,
                 stop_loss=order.stop_loss,
                 take_profit=order.take_profit,
-                comment=f"Order-{str(order.order_id)[:8]}"
+                comment=f"{order.metadata.get('strategy', 'sys')}|{str(order.order_id)[:8]}"
             )
             
             # Update order with MT5 response

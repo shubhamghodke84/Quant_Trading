@@ -86,6 +86,139 @@ class DataEngine:
                     timeframe=tf
                 )
     
+    def preload_historical_bars(self, bars_count: int = 200) -> Dict[str, int]:
+        """
+        Preload historical bars from yfinance on startup.
+        
+        Fetches recent 1m candles so strategies can evaluate immediately
+        instead of waiting 22-130 minutes to build bars from live ticks.
+        
+        Args:
+            bars_count: Number of bars to preload (default 200, enough for all strategies)
+            
+        Returns:
+            Dict of {symbol: bars_loaded}
+        """
+        # Map MT5 symbols to yfinance tickers
+        yf_symbol_map = {
+            'BTCUSD': 'BTC-USD',
+            'ETHUSD': 'ETH-USD',
+            'XAUUSD': 'GC=F',
+        }
+        
+        results = {}
+        
+        for symbol_ticker, symbol in self.symbols.items():
+            yf_ticker = yf_symbol_map.get(symbol_ticker)
+            if not yf_ticker:
+                logger.warning(f"No yfinance mapping for {symbol_ticker}, skipping preload")
+                continue
+            
+            try:
+                import yfinance as yf
+                
+                # Fetch 1m data (yfinance max for 1m is 7 days)
+                ticker = yf.Ticker(yf_ticker)
+                hist = ticker.history(period="1d", interval="1m")
+                
+                if hist.empty:
+                    logger.warning(f"No yfinance data for {symbol_ticker}")
+                    continue
+                
+                # Limit to requested bar count
+                if len(hist) > bars_count:
+                    hist = hist.iloc[-bars_count:]
+                
+                loaded = 0
+                for idx, row in hist.iterrows():
+                    ts = idx.to_pydatetime()
+                    if ts.tzinfo is None:
+                        ts = ts.replace(tzinfo=timezone.utc)
+                    
+                    bar = Bar(
+                        symbol=symbol,
+                        timestamp=ts,
+                        open=Decimal(str(round(row['Open'], 6))),
+                        high=Decimal(str(round(row['High'], 6))),
+                        low=Decimal(str(round(row['Low'], 6))),
+                        close=Decimal(str(round(row['Close'], 6))),
+                        volume=Decimal(str(int(row.get('Volume', 0))))
+                    )
+                    
+                    # Add to 1m store
+                    self.candle_stores[symbol_ticker]['1m'].add_bar(bar)
+                    loaded += 1
+                
+                results[symbol_ticker] = loaded
+                logger.info(
+                    f"Preloaded {loaded} bars for {symbol_ticker} from yfinance "
+                    f"({hist.index[0]} to {hist.index[-1]})"
+                )
+                
+                # Also build higher TF bars from 1m data
+                self._build_higher_tf_from_1m(symbol_ticker)
+                
+            except ImportError:
+                logger.warning("yfinance not installed, skipping preload")
+                break
+            except Exception as e:
+                logger.error(f"Failed to preload {symbol_ticker}: {e}", exc_info=True)
+        
+        return results
+    
+    def _build_higher_tf_from_1m(self, symbol_ticker: str) -> None:
+        """Build higher timeframe bars from preloaded 1m data."""
+        bars_1m = self.candle_stores[symbol_ticker]['1m'].get_bars()
+        if bars_1m.empty:
+            return
+        
+        symbol = self.symbols[symbol_ticker]
+        
+        for tf in self.timeframes:
+            if tf == '1m':
+                continue
+            
+            tf_seconds = self._get_timeframe_seconds(tf)
+            resample_rule = {
+                '5m': '5min', '15m': '15min', '1h': '1h', '4h': '4h', '1d': '1D'
+            }.get(tf)
+            
+            if not resample_rule:
+                continue
+            
+            try:
+                df = bars_1m.set_index('timestamp')
+                resampled = df.resample(resample_rule).agg({
+                    'open': 'first',
+                    'high': 'max',
+                    'low': 'min',
+                    'close': 'last',
+                    'volume': 'sum'
+                }).dropna()
+                
+                for idx, row in resampled.iterrows():
+                    ts = idx.to_pydatetime()
+                    if ts.tzinfo is None:
+                        ts = ts.replace(tzinfo=timezone.utc)
+                    
+                    bar = Bar(
+                        symbol=symbol,
+                        timestamp=ts,
+                        open=Decimal(str(round(row['open'], 6))),
+                        high=Decimal(str(round(row['high'], 6))),
+                        low=Decimal(str(round(row['low'], 6))),
+                        close=Decimal(str(round(row['close'], 6))),
+                        volume=Decimal(str(int(row['volume'])))
+                    )
+                    self.candle_stores[symbol_ticker][tf].add_bar(bar)
+                
+                htf_count = len(self.candle_stores[symbol_ticker][tf])
+                if htf_count > 0:
+                    logger.info(f"Built {htf_count} {tf} bars for {symbol_ticker} from 1m data")
+                    
+            except Exception as e:
+                logger.warning(f"Failed to build {tf} bars for {symbol_ticker}: {e}")
+    
     def on_tick(self, tick: Tick) -> None:
         """
         Process incoming tick.
