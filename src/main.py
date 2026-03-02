@@ -272,6 +272,23 @@ class TradingSystem:
                     self.logger.critical("Kill switch active - halting trading")
                     break
                 
+                # 1a. Check Weekend Holding (Prop Firm Requirement)
+                now_utc = datetime.now(timezone.utc)
+                is_weekend = False
+                if now_utc.weekday() == 5: # Saturday
+                    is_weekend = True
+                elif now_utc.weekday() == 4 and now_utc.hour >= 21: # Friday evening (after 21:00 UTC)
+                    is_weekend = True
+                elif now_utc.weekday() == 6 and now_utc.hour < 21: # Sunday before 21:00 UTC
+                    is_weekend = True
+                    
+                if is_weekend:
+                    if self.loop_iteration % 60 == 1:
+                        self.logger.info("Weekend closure active - waiting for Sunday open")
+                    self._close_all_open_positions()
+                    time.sleep(60) # Sleep longer during weekend
+                    continue
+                
                 # 2. Update data from MT5
                 self.data_engine.update_from_connector()
                 
@@ -477,6 +494,34 @@ class TradingSystem:
             
         except Exception as e:
             self.logger.error("Error updating portfolio prices", error=str(e))
+    
+    def _close_all_open_positions(self) -> None:
+        """Close all open positions on MT5."""
+        try:
+            positions = self.connector.get_positions()
+            if positions:
+                self.logger.info(f"Commanded to close {len(positions)} positions (e.g. Weekend Event)")
+                for pos_id, pos in positions.items():
+                    try:
+                        ticket = pos.metadata.get('mt5_ticket', pos_id) if hasattr(pos, 'metadata') else pos_id
+                        result = self.connector.close_position(str(ticket))
+                        self.logger.info(
+                            f"Closed position",
+                            ticket=str(ticket),
+                            symbol=pos.symbol.ticker if pos.symbol else '?',
+                            result=result.get('status', '?')
+                        )
+                    except Exception as e:
+                        self.logger.error(
+                            f"Failed to close position",
+                            ticket=str(pos_id),
+                            error=str(e)
+                        )
+            else:
+                if self.loop_iteration % 300 == 1:
+                    self.logger.info("No open positions to close")
+        except Exception as e:
+            self.logger.error("Error closing positions", error=str(e))
     
     def _should_save_state(self) -> bool:
         """Check if state should be saved."""

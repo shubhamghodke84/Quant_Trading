@@ -138,22 +138,22 @@ class StrategyManager:
                 signal = strategy.on_bar(bars)
                 
                 if signal:
-                    # Check cooldown before accepting signal
-                    cooldown_key = (symbol, strategy_name)
+                    # Check global symbol cooldown before accepting signal (5-minute reversal buffer)
+                    cooldown_key = symbol
                     now = datetime.now(timezone.utc)
                     last_signal = self._last_signal_time.get(cooldown_key)
                     
                     if last_signal and (now - last_signal) < timedelta(minutes=self._signal_cooldown_minutes):
                         remaining = self._signal_cooldown_minutes - (now - last_signal).total_seconds() / 60
                         self.logger.info(
-                            f"Signal suppressed (cooldown)",
+                            f"Signal suppressed (symbol cooldown / reversal buffer)",
                             strategy=strategy_name,
                             symbol=symbol,
                             remaining_min=f"{remaining:.1f}"
                         )
                         continue
                     
-                    # Accept signal and update cooldown
+                    # Accept signal and update global symbol cooldown
                     self._last_signal_time[cooldown_key] = now
                     signals.append(signal)
                     self.logger.info(

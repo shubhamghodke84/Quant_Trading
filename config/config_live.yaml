@@ -30,19 +30,18 @@ symbols:
 
 risk:
   # STRICT LIVE RISK LIMITS
-  # 5% Max Drawdown ($200) to stop before the $250 breach
-  max_drawdown_pct: 1.00            # Increased to 100% to avoid blocking
-  max_daily_loss_pct: 1.00          # Increased to 100% to avoid blocking
+  # 5% Max Drawdown ($250)
+  max_drawdown_pct: 0.10            # 10% Max Trailing Loss (The5ers)
+  max_daily_loss_pct: 0.05          # 5% Max Daily Loss (The5ers)
   
-  # 0.5% risk per trade ($20) to survive losing streaks
-  risk_per_trade_pct: 0.05          # 5% for prop challenge (was 0.02)
+  # 0.2% risk per trade ($10 on $5k)
+  risk_per_trade_pct: 0.002         # $10 risk per trade
   
-  # ABSOLUTE DOLLAR LOSS/PROFIT LIMITS (GFT account protection)
-  # Kill switch triggers at $240 loss, leaving $10 buffer before $250 breach
-  absolute_max_loss_usd: 240
-  max_daily_profit_usd: 200         # Daily profit target to secure gains
+  # ABSOLUTE DOLLAR LOSS/PROFIT LIMITS
+  absolute_max_loss_usd: 250        # Daily loss limit
+  max_daily_profit_usd: 135         # $133.33/day to hit $400 in 3 days
   
-  max_positions: 3                  # Reduced to limit exposure
+  max_positions: 2                  # Restrict to two trades at a time
   max_daily_trades: 50
   max_exposure_per_symbol_pct: 5.0    # 500% - needed for small accounts on high-priced instruments (0.01 BTCUSD = ~$66k notional vs $154 equity)
   
@@ -149,12 +148,12 @@ trading_hours:
   
   news_filter:
     enabled: true  # ALWAYS ON FOR LIVE
-    csv_path: news/FEB_news.csv
+    csv_path: news/MAR_news.csv
     currency: USD
     impacts:
       - high
       - red
-    buffer_min: 15
+    buffer_min: 10
     timezone: Asia/Kolkata
 
 monitoring:
