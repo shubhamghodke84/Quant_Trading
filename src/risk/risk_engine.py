@@ -82,8 +82,9 @@ class RiskEngine:
         self.drawdown_tracker = DrawdownTracker(max_drawdown_pct=self.max_drawdown_pct)
         self.exposure_manager = ExposureManager(max_exposure_pct=self.max_exposure_per_symbol_pct)
         
-        # Absolute dollar loss limit (GFT account protection)
+        # Absolute dollar limits (GFT account protection)
         self.absolute_max_loss_usd = Decimal(str(risk_config.get('absolute_max_loss_usd', 0)))
+        self.max_daily_profit_usd = Decimal(str(risk_config.get('max_daily_profit_usd', 0)))
         self.initial_balance = Decimal(str(config.get('account', {}).get('initial_balance', 0)))
         
         # State tracking
@@ -205,6 +206,17 @@ class RiskEngine:
                 reason = f"Daily loss limit reached (zero limit): ${daily_loss} >= ${max_daily_loss}"
                 self._trigger_kill_switch(reason)
                 raise DailyLossLimitError(reason, daily_loss=daily_loss, limit=max_daily_loss)
+            
+            # CHECK 4b: Daily profit limit
+            if self.max_daily_profit_usd > 0 and daily_pnl >= self.max_daily_profit_usd:
+                reason = f"🎯 Daily profit target reached: ${daily_pnl} >= ${self.max_daily_profit_usd}. Stopping for today."
+                self.logger.info(
+                    "DAILY PROFIT TARGET REACHED",
+                    daily_pnl=float(daily_pnl),
+                    target=float(self.max_daily_profit_usd),
+                    order_id=str(order.order_id)
+                )
+                return False, reason
             
             # Warn if approaching limit (80%)
             if daily_loss >= max_daily_loss * Decimal("0.8"):

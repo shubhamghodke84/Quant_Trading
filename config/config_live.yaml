@@ -11,7 +11,7 @@ account:
 
 symbols:
   XAUUSD:
-    enabled: false
+    enabled: true
     pip_value: 0.01
     min_lot: 0.01
     max_lot: 10.0
@@ -20,7 +20,7 @@ symbols:
     commission_per_lot: 0.0
   
   BTCUSD:
-    enabled: true
+    enabled: false
     pip_value: 0.1
     min_lot: 0.01
     max_lot: 2.0
@@ -37,9 +37,10 @@ risk:
   # 0.5% risk per trade ($20) to survive losing streaks
   risk_per_trade_pct: 0.05          # 5% for prop challenge (was 0.02)
   
-  # ABSOLUTE DOLLAR LOSS LIMIT (GFT account protection)
+  # ABSOLUTE DOLLAR LOSS/PROFIT LIMITS (GFT account protection)
   # Kill switch triggers at $240 loss, leaving $10 buffer before $250 breach
   absolute_max_loss_usd: 240
+  max_daily_profit_usd: 200         # Daily profit target to secure gains
   
   max_positions: 3                  # Reduced to limit exposure
   max_daily_trades: 50
