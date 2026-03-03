@@ -108,6 +108,12 @@ class TradingSystem:
         # Track last processed bar timestamps to prevent signal spam
         self._last_processed_bars: Dict[str, datetime] = {}
         
+        # The5ers: directional lock + 5-min reversal buffer state
+        # Records the timestamp of the most recent position CLOSE for each side.
+        # Used to block opposite-side trades for reversal_buffer_min minutes.
+        self._last_close_time: Dict[str, datetime] = {}  # 'BUY' or 'SELL' → close timestamp
+        self._reversal_buffer_min: int = 5  # 5-minute buffer per The5ers rules
+        
         # News filter events (loaded during setup if enabled)
         self._news_events_df = None
         self._news_filter_cfg = None
@@ -444,6 +450,46 @@ class TradingSystem:
             
             daily_pnl = self.portfolio_engine.daily_realized_pnl + self.portfolio_engine.get_total_unrealized_pnl()
             
+            # ── The5ers Rule: Directional Lock ────────────────────────────
+            # No SELL allowed if a BUY is open; no BUY allowed if a SELL is open.
+            from src.core.constants import OrderSide as _OrderSide, PositionSide as _PositionSide
+            signal_side = signal.side  # OrderSide.BUY or OrderSide.SELL
+            for pos in mt5_positions.values():
+                pos_side = getattr(pos, 'side', None)
+                if pos_side is None:
+                    continue
+                # Map position side to expected signal side
+                is_long = pos_side == _PositionSide.LONG
+                is_short = pos_side == _PositionSide.SHORT
+                if (signal_side == _OrderSide.BUY and is_short) or \
+                   (signal_side == _OrderSide.SELL and is_long):
+                    self.logger.info(
+                        f"[The5ers] Directional lock: {'SHORT' if is_short else 'LONG'} open, "
+                        f"rejecting {signal_side.value} signal",
+                        strategy=signal.strategy_name,
+                        symbol=signal.symbol.ticker if signal.symbol else '?'
+                    )
+                    return
+            
+            # ── The5ers Rule: 5-Minute Reversal Buffer ────────────────────
+            # After closing a position in one direction, block the opposite
+            # direction for reversal_buffer_min minutes.
+            opposite_side_key = (
+                'SELL' if signal_side == _OrderSide.BUY else 'BUY'
+            )
+            last_opposite_close = self._last_close_time.get(opposite_side_key)
+            if last_opposite_close is not None:
+                elapsed_min = (datetime.now(timezone.utc) - last_opposite_close).total_seconds() / 60.0
+                if elapsed_min < self._reversal_buffer_min:
+                    self.logger.info(
+                        f"[The5ers] Reversal buffer active: last {opposite_side_key} closed "
+                        f"{elapsed_min:.1f}m ago (buffer={self._reversal_buffer_min}m), "
+                        f"rejecting {signal_side.value}",
+                        strategy=signal.strategy_name,
+                        symbol=signal.symbol.ticker if signal.symbol else '?'
+                    )
+                    return
+            
             # Submit signal to execution engine
             order = self.execution_engine.submit_signal(
                 signal=signal,
@@ -562,8 +608,17 @@ class TradingSystem:
         return elapsed >= interval
     
     def _reconcile_portfolio(self) -> None:
-        """Reconcile portfolio with MT5."""
+        """Reconcile portfolio with MT5.
+        
+        Also detects closed positions to update the The5ers reversal buffer clock.
+        """
         try:
+            # Snapshot positions BEFORE reconciliation to detect closures
+            positions_before = {
+                str(p.position_id): p
+                for p in self.portfolio_engine.get_all_positions()
+            }
+            
             success, discrepancies = self.portfolio_engine.reconcile_with_mt5()
             
             if not success:
@@ -572,10 +627,32 @@ class TradingSystem:
                     count=len(discrepancies)
                 )
             
+            # Detect closed positions (present before, absent now) and update
+            # the reversal buffer clock for The5ers 5-minute rule.
+            try:
+                from src.core.constants import PositionSide as _PositionSide
+                positions_after = {
+                    str(p.position_id): p
+                    for p in self.portfolio_engine.get_all_positions()
+                }
+                now_utc = datetime.now(timezone.utc)
+                for pid, pos in positions_before.items():
+                    if pid not in positions_after:
+                        pos_side = getattr(pos, 'side', None)
+                        if pos_side == _PositionSide.LONG:
+                            self._last_close_time['BUY'] = now_utc
+                            self.logger.info("[The5ers] Recorded LONG close for reversal buffer")
+                        elif pos_side == _PositionSide.SHORT:
+                            self._last_close_time['SELL'] = now_utc
+                            self.logger.info("[The5ers] Recorded SHORT close for reversal buffer")
+            except Exception as rb_err:
+                self.logger.warning(f"Reversal buffer update failed (non-critical): {rb_err}")
+            
             self.last_reconciliation = datetime.now(timezone.utc)
             
         except Exception as e:
             self.logger.error("Error during reconciliation", error=str(e))
+
     
     def _restore_state(self) -> None:
         """Restore state from previous session."""

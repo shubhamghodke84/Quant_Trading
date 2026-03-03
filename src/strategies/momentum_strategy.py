@@ -2,18 +2,24 @@
 Momentum Strategy - RSI + MACD confluence with enhanced filtering.
 
 Entry Logic:
-- Buy: RSI in 50-75 AND MACD histogram crossing zero AND accelerating
-       AND Price > EMA(20) AND ADX >= 20 AND volume above average
-- Sell: RSI in 25-50 AND MACD histogram crossing zero AND accelerating
-        AND Price < EMA(20) AND ADX >= 20 AND volume above average
+- Buy: RSI > 50 (not overbought < 75) AND MACD histogram > 0 AND accelerating
+       AND Price > EMA(20) AND ADX >= adx_min_threshold AND volume OK
+- Sell: RSI < 50 (not oversold > 25) AND MACD histogram < 0 AND deepening
+        AND Price < EMA(20) AND ADX >= adx_min_threshold AND volume OK
+
+Note: MACD condition intentionally NOT requiring a zero-line crossover —
+on 1-minute bars exact zero-crosses are very rare. We require the histogram
+to be on the correct side AND growing in magnitude (momentum building).
+
+VWAP filter removed: cumulative VWAP is unreliable when volume data
+is unavailable (file bridge provides stub zeros).
 
 Exit Logic:
-- ATR-based stop loss (1.2× ATR default, tighter than before)
-- Take profit at configurable R:R ratio (default 2.0)
+- ATR-based stop loss (configurable multiplier, default 2.0)
+- Take profit at configurable R:R ratio (default 1.5)
 
 Best for:
-- Trending intraday moves
-- Momentum continuation with confirmation
+- Trending intraday moves on XAUUSD 1-minute timeframe
 """
 
 from typing import Optional, Dict
@@ -102,7 +108,6 @@ class MomentumStrategy(BaseStrategy):
         )
         atr = Indicators.atr(bars, period=14)
         adx = Indicators.adx(bars, period=14)
-        vwap = Indicators.vwap(bars)
         
         current_close = bars['close'].iloc[-1]
         current_rsi = rsi.iloc[-1]
@@ -111,9 +116,8 @@ class MomentumStrategy(BaseStrategy):
         prev_histogram = histogram.iloc[-2]
         current_atr = atr.iloc[-1]
         current_adx = adx.iloc[-1]
-        current_vwap = vwap.iloc[-1]
         
-        if any(pd.isna([current_rsi, current_ema, current_histogram, prev_histogram, current_atr, current_adx, current_vwap])):
+        if any(pd.isna([current_rsi, current_ema, current_histogram, prev_histogram, current_atr, current_adx])):
             self._log_no_signal("Indicator calculation failed")
             return None
         
@@ -139,14 +143,15 @@ class MomentumStrategy(BaseStrategy):
         # --- Check for bullish momentum confluence ---
         rsi_bullish = current_rsi > self.rsi_bull_threshold
         rsi_not_overbought = current_rsi < self.rsi_overbought  # Don't buy exhausted moves
-        macd_turning_positive = current_histogram > 0 and prev_histogram <= 0  # Zero-line crossover
-        macd_accelerating = abs(current_histogram) > abs(prev_histogram)  # Histogram growing
+        # MACD: histogram positive (bullish side) AND growing in magnitude (momentum building)
+        # We do NOT require an exact zero-line crossover — on 1-min bars this is too rare.
+        macd_positive = current_histogram > 0
+        macd_accelerating = abs(current_histogram) > abs(prev_histogram)
         price_above_ema = current_close > current_ema
-        price_above_vwap = current_close > current_vwap  # Strict trend confirmation
         
         if (rsi_bullish and rsi_not_overbought and 
-            macd_turning_positive and macd_accelerating and 
-            price_above_ema and price_above_vwap and volume_ok):
+            macd_positive and macd_accelerating and 
+            price_above_ema and volume_ok):
             
             stop_loss = current_close - (self.atr_stop_multiplier * current_atr)
             risk = current_close - stop_loss
@@ -173,10 +178,9 @@ class MomentumStrategy(BaseStrategy):
                     'adx': float(current_adx),
                     'macd_histogram': float(current_histogram),
                     'ema': float(current_ema),
-                    'vwap': float(current_vwap),
                     'atr': float(current_atr),
                     'volume_ratio': float(volume_ratio),
-                    'macd_turning': macd_turning_positive,
+                    'macd_positive': macd_positive,
                     'macd_accelerating': macd_accelerating,
                     'entry_reason': 'bullish_momentum'
                 }
@@ -185,14 +189,14 @@ class MomentumStrategy(BaseStrategy):
         # --- Check for bearish momentum confluence ---
         rsi_bearish = current_rsi < self.rsi_bear_threshold
         rsi_not_oversold = current_rsi > self.rsi_oversold  # Don't sell exhausted moves
-        macd_turning_negative = current_histogram < 0 and prev_histogram >= 0  # Zero-line crossover
-        macd_decelerating = abs(current_histogram) > abs(prev_histogram)  # Histogram growing (in negative dir)
+        # MACD: histogram negative (bearish side) AND deepening in magnitude
+        macd_negative = current_histogram < 0
+        macd_decelerating = abs(current_histogram) > abs(prev_histogram)
         price_below_ema = current_close < current_ema
-        price_below_vwap = current_close < current_vwap  # Strict trend confirmation
         
         if (rsi_bearish and rsi_not_oversold and
-            macd_turning_negative and macd_decelerating and
-            price_below_ema and price_below_vwap and volume_ok):
+            macd_negative and macd_decelerating and
+            price_below_ema and volume_ok):
             
             stop_loss = current_close + (self.atr_stop_multiplier * current_atr)
             risk = stop_loss - current_close
@@ -218,10 +222,9 @@ class MomentumStrategy(BaseStrategy):
                     'adx': float(current_adx),
                     'macd_histogram': float(current_histogram),
                     'ema': float(current_ema),
-                    'vwap': float(current_vwap),
                     'atr': float(current_atr),
                     'volume_ratio': float(volume_ratio),
-                    'macd_turning': macd_turning_negative,
+                    'macd_negative': macd_negative,
                     'macd_accelerating': macd_decelerating,
                     'entry_reason': 'bearish_momentum'
                 }

@@ -60,11 +60,12 @@ class FileSystemStateStore:
             True if successful
         """
         try:
+            import os
             # Serialize to JSON
             state_json = json.dumps(state_dict, indent=2, default=str)
             
-            # Write to temp file
-            temp_file = self.current_file.with_suffix(".tmp")
+            # Write to temp file (unique per process to prevent collision if multiple bots run)
+            temp_file = self.current_file.with_suffix(f".tmp.{os.getpid()}")
             with open(temp_file, 'w') as f:
                 f.write(state_json)
             

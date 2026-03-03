@@ -1,6 +1,6 @@
 # Live Trading Environment Configuration
-# PRODUCTION ACCOUNT - $4,000 Balance
-# MAX LOSS LIMIT: $250 (Account Breach Threshold)
+# $5K Account Size - The5ers Challenge
+# Rules: 5% daily loss ($250), 10% max trailing drawdown ($500), 8% profit target ($400)
 
 environment: live
 
@@ -123,16 +123,17 @@ strategies:
   
   # Kalman Regime-Switching Strategy (Instruct.md)
   kalman_regime:
-    enabled: true
+    enabled: true              # ← Enabled for The5ers challenge
     kalman_q: 0.00001           # Process noise (lower = smoother)
     kalman_r: 0.01              # Measurement noise
     rv_window: 20               # Realized volatility window
     rv_ma_window: 100           # RV moving average for regime threshold
     zscore_window: 20           # OU z-score std window
     entry_threshold: 2.0        # |Z| threshold for range-mode entry
+    trend_adx_min: 15           # Light ADX gate for trend mode (avoids dead-flat markets)
     atr_period: 14
-    sl_atr_multiplier: 2.5      # Was 1.5 → wider stops
-    tp_atr_multiplier: 2.0      # Was 3.0 → tighter TP, scalp profits faster
+    sl_atr_multiplier: 2.5      # Stop loss distance
+    tp_atr_multiplier: 2.0      # Take profit distance
     news_filter: true           # Skip signals during news blackout
 
 trading_hours:

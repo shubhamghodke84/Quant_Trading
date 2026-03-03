@@ -7,16 +7,17 @@ and Ornstein-Uhlenbeck z-scored mean reversion into a single strategy.
 Signal Logic (from Instruct.md):
 
 Trend Mode  (RV > MA(RV)):
-    Long   if Close > Kalman
-    Short  if Close < Kalman
+    Long   if Close > Kalman  (price above adaptive trend)
+    Short  if Close < Kalman  (price below adaptive trend)
+    Confirmation: light ADX > 15 to avoid flat/choppy markets
 
 Range Mode  (RV ≤ MA(RV)):
-    Long   if OU Z-score < -entry_threshold  (oversold)
-    Short  if OU Z-score > +entry_threshold  (overbought)
+    Long   if OU Z-score < -entry_threshold  (oversold — confirmed by RSI < 45)
+    Short  if OU Z-score > +entry_threshold  (overbought — confirmed by RSI > 55)
 
 Risk Management:
-    Stop Loss  = 1.5 × ATR(14)
-    Take Profit = 3.0 × ATR(14)
+    Stop Loss  = sl_atr_multiplier × ATR(14)   (default 2.5)
+    Take Profit = tp_atr_multiplier × ATR(14)  (default 2.0)
 
 Optional:
     - News filter blackout (ForexFactory)
@@ -35,112 +36,132 @@ from ..data.indicators import Indicators
 class KalmanRegimeStrategy(BaseStrategy):
     """
     Regime-switching strategy using Kalman filter + RV regime + OU z-score.
-    
+
     Adapts between trend-following and mean-reversion based on
     realized volatility regime classification.
+
+    Trend mode: Follow the Kalman adaptive trend (Close > Kalman → BUY).
+    Range mode: Mean-revert on OU z-score extremes.
     """
-    
+
     def __init__(self, symbol: Symbol, config: dict):
         super().__init__(symbol, config)
-        
+
         # Kalman parameters
         self.kalman_q = config.get('kalman_q', 1e-5)
         self.kalman_r = config.get('kalman_r', 0.01)
-        
+
         # Realized volatility regime
         self.rv_window = config.get('rv_window', 20)
         self.rv_ma_window = config.get('rv_ma_window', 100)
-        
+
         # OU z-score thresholds (range mode)
         self.zscore_window = config.get('zscore_window', 20)
         self.entry_threshold = config.get('entry_threshold', 2.0)
-        
+
         # ATR-based risk management
         self.atr_period = config.get('atr_period', 14)
-        self.sl_atr_mult = config.get('sl_atr_multiplier', 1.5)
-        self.tp_atr_mult = config.get('tp_atr_multiplier', 3.0)
-        
+        self.sl_atr_mult = config.get('sl_atr_multiplier', 2.5)
+        self.tp_atr_mult = config.get('tp_atr_multiplier', 2.0)
+
+        # Minimum trend ADX confirmation (light — only avoids dead-flat markets)
+        self.trend_adx_min = config.get('trend_adx_min', 15)
+
         # News filter (optional)
         self.news_filter_enabled = config.get('news_filter', False)
         self._news_events = None
-        
+
         # Minimum data required
         self.min_bars = max(self.rv_ma_window, 100) + self.rv_window + 10
-    
+
     def get_name(self) -> str:
         return "kalman_regime"
-    
+
     def on_bar(self, bars: pd.DataFrame) -> Optional[Signal]:
-        """Generate regime-switching signal."""
+        """Generate regime-switching signal per Instruct.md specification."""
         if not self.is_enabled():
             return None
-        
+
         if len(bars) < self.min_bars:
             self._log_no_signal(f"Insufficient data: {len(bars)} < {self.min_bars}")
             return None
-        
+
         close = bars['close']
         current_close = float(close.iloc[-1])
-        
-        # 1. Kalman filter trend
+
+        # ── 1. Kalman filter trend ──────────────────────────────────────────
         kalman = Indicators.kalman_filter(close, q=self.kalman_q, r=self.kalman_r)
         current_kalman = float(kalman.iloc[-1])
-        
-        # 2. Realized volatility regime
+
+        # ── 2. Realized volatility regime ──────────────────────────────────
         regime_series = Indicators.rv_regime(
             close, rv_window=self.rv_window, rv_ma_window=self.rv_ma_window
         )
         current_regime_val = int(regime_series.iloc[-1]) if not pd.isna(regime_series.iloc[-1]) else -1
-        
+
         if current_regime_val == -1:
             self._log_no_signal("Regime classification unavailable (NaN)")
             return None
-        
+
         is_trend = current_regime_val == 1
         regime = MarketRegime.TREND if is_trend else MarketRegime.RANGE
-        
-        # 3. OU z-score (for range mode)
+
+        # ── 3. OU z-score (for range mode) ─────────────────────────────────
         zscore = Indicators.ou_zscore(close, kalman, window=self.zscore_window)
         current_z = float(zscore.iloc[-1]) if not pd.isna(zscore.iloc[-1]) else 0.0
-        
-        # 4. Strict momentum indicators for 95% win rate target
+
+        # ── 4. Supporting indicators ────────────────────────────────────────
         rsi = Indicators.rsi(bars, period=14)
         adx = Indicators.adx(bars, period=14)
         current_rsi = float(rsi.iloc[-1]) if not pd.isna(rsi.iloc[-1]) else 50.0
         current_adx = float(adx.iloc[-1]) if not pd.isna(adx.iloc[-1]) else 0.0
-        
-        # 5. ATR for stop/take-profit
+
+        # ── 5. ATR for stop/take-profit ─────────────────────────────────────
         atr = Indicators.atr(bars, period=self.atr_period)
         current_atr = float(atr.iloc[-1])
         if current_atr <= 0 or pd.isna(current_atr):
             self._log_no_signal("ATR unavailable")
             return None
-        
+
         stop_distance = self.sl_atr_mult * current_atr
         tp_distance = self.tp_atr_mult * current_atr
-        
-        # 6. Signal generation
+
+        # ── 6. Signal generation ────────────────────────────────────────────
         side = None
         strength = 0.0
-        
+
         if is_trend:
-            # Trend mode: follow Kalman direction, but require strong ADX and safe RSI
-            if current_adx > 25.0:  # Strict trend requirement
-                if current_close > current_kalman and current_rsi < 70.0:  # Don't buy overbought
-                    side = OrderSide.BUY
-                    strength = min(abs(current_close - current_kalman) / current_atr, 1.0)
-                elif current_close < current_kalman and current_rsi > 30.0: # Don't sell oversold
-                    side = OrderSide.SELL
-                    strength = min(abs(current_close - current_kalman) / current_atr, 1.0)
-        else:
-            # Range mode: mean reversion on z-score, check RSI alignment
-            if current_z < -self.entry_threshold and current_rsi < 35.0:  # Confirmed oversold
+            # ── TREND MODE (Instruct.md spec) ────────────────────────────
+            # Core rule: Close > Kalman → BUY, Close < Kalman → SELL
+            # Light confirmation: ADX > trend_adx_min (avoids flat, dead markets)
+            if current_adx < self.trend_adx_min:
+                self._log_no_signal(
+                    f"TREND mode: ADX too low ({current_adx:.1f} < {self.trend_adx_min})"
+                )
+                return None
+
+            price_above_kalman = current_close > current_kalman
+            price_below_kalman = current_close < current_kalman
+
+            if price_above_kalman:
                 side = OrderSide.BUY
-                strength = min(abs(current_z) / 3.0, 1.0)
-            elif current_z > self.entry_threshold and current_rsi > 65.0:   # Confirmed overbought
+                # Strength = normalised Kalman separation
+                strength = min(abs(current_close - current_kalman) / current_atr, 1.0)
+            elif price_below_kalman:
                 side = OrderSide.SELL
-                strength = min(abs(current_z) / 3.0, 1.0)
-        
+                strength = min(abs(current_close - current_kalman) / current_atr, 1.0)
+
+        else:
+            # ── RANGE MODE (OU mean-reversion) ───────────────────────────
+            # Core rule: Z < -threshold → BUY (oversold), Z > +threshold → SELL (overbought)
+            # RSI confirmation: mildly aligned with direction (< 45 or > 55)
+            if current_z < -self.entry_threshold and current_rsi < 45.0:
+                side = OrderSide.BUY
+                strength = min(abs(current_z) / (self.entry_threshold * 1.5), 1.0)
+            elif current_z > self.entry_threshold and current_rsi > 55.0:
+                side = OrderSide.SELL
+                strength = min(abs(current_z) / (self.entry_threshold * 1.5), 1.0)
+
         if side is None:
             mode_str = "TREND" if is_trend else "RANGE"
             self._log_no_signal(
@@ -149,15 +170,15 @@ class KalmanRegimeStrategy(BaseStrategy):
                 f"adx={current_adx:.1f}, rsi={current_rsi:.1f})"
             )
             return None
-        
-        # Compute SL / TP
+
+        # ── 7. Compute SL / TP ──────────────────────────────────────────────
         if side == OrderSide.BUY:
             stop_loss = current_close - stop_distance
             take_profit = current_close + tp_distance
         else:
             stop_loss = current_close + stop_distance
             take_profit = current_close - tp_distance
-        
+
         return self._create_signal(
             side=side,
             strength=strength,
@@ -170,6 +191,8 @@ class KalmanRegimeStrategy(BaseStrategy):
                 'mode': 'trend' if is_trend else 'range',
                 'kalman': current_kalman,
                 'zscore': current_z,
+                'adx': current_adx,
+                'rsi': current_rsi,
                 'atr': current_atr,
                 'sl_distance': stop_distance,
                 'tp_distance': tp_distance,

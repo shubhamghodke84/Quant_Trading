@@ -51,6 +51,9 @@ class BreakoutStrategy(BaseStrategy):
         # ATR-based stop loss (replaces opposite-channel stop)
         self.atr_stop_multiplier = config.get('atr_stop_multiplier', 2.0)
         
+        # ADX minimum for trend confirmation (config-driven — not hardcoded)
+        self.adx_min_threshold = config.get('adx_min_threshold', 20)
+        
         # Volume confirmation
         self.volume_confirmation = config.get('volume_confirmation', True)
         self.volume_ratio_min = config.get('volume_ratio_min', 1.2)
@@ -156,9 +159,9 @@ class BreakoutStrategy(BaseStrategy):
         # KEY CHANGE: Require CLOSE above channel (not just wick/high)
         if current_close > breakout_upper:
             
-            # Strict 95% win rate checks
-            if current_adx < 25.0:
-                self._log_no_signal(f"ADX too low for breakout ({current_adx:.1f} < 25.0)")
+            # ADX threshold check (from config, default 20)
+            if current_adx < self.adx_min_threshold:
+                self._log_no_signal(f"ADX too low for breakout ({current_adx:.1f} < {self.adx_min_threshold})")
                 return None
             
             if current_close < current_vwap:
@@ -225,9 +228,9 @@ class BreakoutStrategy(BaseStrategy):
         # KEY CHANGE: Require CLOSE below channel (not just wick/low)
         if current_close < breakout_lower:
             
-            # Strict 95% win rate checks
-            if current_adx < 25.0:
-                self._log_no_signal(f"ADX too low for bearish breakout ({current_adx:.1f} < 25.0)")
+            # ADX threshold check (from config, default 20)
+            if current_adx < self.adx_min_threshold:
+                self._log_no_signal(f"ADX too low for bearish breakout ({current_adx:.1f} < {self.adx_min_threshold})")
                 return None
                 
             if current_close > current_vwap:
