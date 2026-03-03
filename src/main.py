@@ -213,23 +213,51 @@ class TradingSystem:
             
             # 10. Load news filter events if enabled
             nf_cfg = self.config.get('trading_hours', {}).get('news_filter', {})
+            
             if nf_cfg.get('enabled', False):
-                csv_path = nf_cfg.get('csv_path', 'news/FEB_news.csv')
-                try:
-                    self._news_events_df = load_ff_events(
-                        csv_path=csv_path,
-                        currency=nf_cfg.get('currency', 'USD'),
-                        impacts=nf_cfg.get('impacts', ['high', 'red']),
-                    )
-                    self._news_filter_cfg = nf_cfg
-                    self.logger.info(
-                        f"✓ News filter loaded ({len(self._news_events_df)} events)"
-                    )
-                except FileNotFoundError:
+                # Dynamic daily CSV resolution:
+                # 1. Try news/YYYY-MM-DD_news.csv (today's auto-fetched file)
+                # 2. Try yesterday's dated file
+                # 3. Fall back to csv_path in config
+                today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+                yesterday_str = (datetime.now(timezone.utc) - timedelta(days=1)).strftime("%Y-%m-%d")
+                
+                candidates = [
+                    f"news/{today_str}_news.csv",
+                    f"news/{yesterday_str}_news.csv",
+                    nf_cfg.get('csv_path', 'news/MAR_news.csv'),
+                ]
+                
+                csv_path = None
+                for candidate in candidates:
+                    if Path(candidate).exists():
+                        csv_path = candidate
+                        break
+                
+                if csv_path is None:
                     self.logger.warning(
-                        f"News filter CSV not found: {csv_path} — filter disabled"
+                        "No news CSV found — news filter disabled. "
+                        "Run: python scripts/fetch_daily_news.py"
                     )
                     self._news_events_df = None
+                else:
+                    try:
+                        self._news_events_df = load_ff_events(
+                            csv_path=csv_path,
+                            currency=nf_cfg.get('currency', 'USD'),
+                            impacts=nf_cfg.get('impacts', ['high', 'red']),
+                        )
+                        self._news_filter_cfg = nf_cfg
+                        self.logger.info(
+                            f"✓ News filter loaded: {csv_path} "
+                            f"({len(self._news_events_df)} events)"
+                        )
+                    except Exception as e:
+                        self.logger.warning(
+                            f"News filter CSV failed to load ({csv_path}): {e} — filter disabled"
+                        )
+                        self._news_events_df = None
+
             
             # 9. Restore state from crash (if any)
             self.logger.info("9. Checking for previous state...")
