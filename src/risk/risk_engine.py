@@ -368,10 +368,7 @@ class RiskEngine:
 
         # ── Fixed lot mode: always use exactly the configured lot size ─────
         if sizing_cfg.get('method') == 'fixed_lot':
-            fixed = Decimal(str(sizing_cfg.get('fixed_lot', symbol.min_lot)))
-            # Clamp to symbol constraints
-            fixed = max(fixed, symbol.min_lot)
-            fixed = min(fixed, symbol.max_lot)
+            fixed = Decimal(str(sizing_cfg.get('fixed_lot', '0.01')))
             self.logger.debug(
                 "Using fixed_lot sizing: %s lots for %s",
                 float(fixed), symbol.ticker
