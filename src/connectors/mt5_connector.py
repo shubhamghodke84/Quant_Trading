@@ -162,7 +162,8 @@ class MT5Connector:
         Get all open positions from MT5.
         
         Returns:
-            Dict mapping position_id (str) to Position object
+            Dict mapping MT5 ticket str to Position object
+            (keyed by ticket so TrailingStopManager can pass it to modify_position)
         """
         logger.debug("Requesting positions from MT5")
         try:
@@ -173,10 +174,13 @@ class MT5Connector:
             
             for mt5_pos in response.get('positions', []):
                 position = self._convert_mt5_position(mt5_pos)
-                positions[str(position.position_id)] = position
-                logger.debug("Converted position: %s %s @ %s (PnL: %s)",
+                # Key by MT5 ticket so the trailing stop manager can call
+                # modify_position(position_id=ticket_str) directly
+                ticket_str = str(mt5_pos.get('ticket', position.position_id))
+                positions[ticket_str] = position
+                logger.debug("Converted position: %s %s @ %s (ticket=%s PnL: %s)",
                            position.symbol.ticker, position.side.value,
-                           position.entry_price, position.unrealized_pnl)
+                           position.entry_price, ticket_str, position.unrealized_pnl)
             
             logger.info("Retrieved %d positions from MT5", len(positions))
             return positions
