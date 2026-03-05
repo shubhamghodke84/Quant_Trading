@@ -514,17 +514,17 @@ class TradingSystem:
                     # else: empty = all allowed
                     if self.loop_iteration % 120 == 1:
                         self.logger.info(
-                            "[Session] Active: %s (%s-%s UTC) strategies=%s",
-                            session['name'], sstart, send,
-                            session_strats if session_strats else 'ALL'
+                            f"[Session] Active: {session['name']} "
+                            f"({sstart}-{send} UTC) strategies="
+                            f"{session_strats if session_strats else 'ALL'}"
                         )
                     break  # first matching session wins
 
         if not in_any_session:
             if self.loop_iteration % 120 == 1:
                 self.logger.info(
-                    "[Session] %s UTC — outside all session windows, waiting.",
-                    datetime.now(timezone.utc).strftime('%H:%M')
+                    f"[Session] {datetime.now(timezone.utc).strftime('%H:%M')} UTC "
+                    "— outside all session windows, waiting."
                 )
             return
 
