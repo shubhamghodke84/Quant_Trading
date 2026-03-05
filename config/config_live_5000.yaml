@@ -106,7 +106,7 @@ risk:
 strategies:
   signal_cooldown_minutes: 5
   primary_timeframe: 1m
-  min_bars_required: 10
+  min_bars_required: 5              # Reduced from 10 so 5m strategies activate faster
 
   regime_filter:
     enabled: true
@@ -206,14 +206,33 @@ strategies:
 
 trading_hours:
   sessions:
+    # ── ASIAN SESSION ─────────────────────────────────────────────────────────
+    # Tokyo/Singapore active. Gold trends slowly in one direction.
+    # Best strategies: Kalman (trend) + Breakout (range break). Avoid mean reversion.
+    # Times in UTC | IST equivalent: 07:00-11:30
+    - name: asian
+      start: "01:30"             # 07:00 IST
+      end: "06:00"               # 11:30 IST
+      enabled: true
+      strategies: [kalman_regime, breakout]  # Only trend/breakout in Asian session
+
+    # ── LONDON OPEN ───────────────────────────────────────────────────────────
+    # Highest volatility, biggest moves. All strategies allowed.
+    # Times in UTC | IST equivalent: 12:30-15:00
     - name: london_open
-      start: "07:00"
-      end: "09:00"                # First 2 hours of London session (highest probability)
+      start: "07:00"             # 12:30 IST
+      end: "09:30"               # 15:00 IST
       enabled: true
+      strategies: [breakout, momentum, kalman_regime, mean_reversion, vwap]
+
+    # ── NY OPEN ───────────────────────────────────────────────────────────────
+    # High volatility, strong continuation moves after London direction is set.
+    # Times in UTC | IST equivalent: 17:30-20:00
     - name: new_york_open
-      start: "12:00"
-      end: "14:00"                # First 2 hours of NY session (highest probability)
+      start: "12:00"             # 17:30 IST
+      end: "14:30"               # 20:00 IST
       enabled: true
+      strategies: [breakout, momentum, kalman_regime, mean_reversion, vwap]
 
   news_filter:
     enabled: true               # RESTRICTED: No trades ±5 min around high-impact news

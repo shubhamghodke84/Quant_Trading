@@ -484,7 +484,50 @@ class TradingSystem:
                 if self.loop_iteration % 60 == 1:
                     self.logger.info("News blackout active — skipping strategies")
                 return
-        
+
+        # ── Session time enforcement ──────────────────────────────────────────
+        # Reads sessions from trading_hours.sessions config.
+        # If no sessions configured: runs 24/7.
+        # If sessions configured but none active: suppresses all signals.
+        sessions_cfg = self.config.get('trading_hours', {}).get('sessions', [])
+        allowed_strategies: set = set()   # empty set = ALL strategies allowed
+        in_any_session = not sessions_cfg  # if no config, always in-session
+
+        if sessions_cfg:
+            now_utc = datetime.now(timezone.utc)
+            now_hhmm = now_utc.strftime('%H:%M')
+            for session in sessions_cfg:
+                if not session.get('enabled', True):
+                    continue
+                sstart = session.get('start', '00:00')
+                send   = session.get('end',   '23:59')
+                # Support sessions that cross midnight (e.g. 22:00-02:00)
+                if sstart <= send:
+                    active = sstart <= now_hhmm < send
+                else:
+                    active = now_hhmm >= sstart or now_hhmm < send
+                if active:
+                    in_any_session = True
+                    session_strats = session.get('strategies', [])
+                    if session_strats:
+                        allowed_strategies.update(session_strats)
+                    # else: empty = all allowed
+                    if self.loop_iteration % 120 == 1:
+                        self.logger.info(
+                            "[Session] Active: %s (%s-%s UTC) strategies=%s",
+                            session['name'], sstart, send,
+                            session_strats if session_strats else 'ALL'
+                        )
+                    break  # first matching session wins
+
+        if not in_any_session:
+            if self.loop_iteration % 120 == 1:
+                self.logger.info(
+                    "[Session] %s UTC — outside all session windows, waiting.",
+                    datetime.now(timezone.utc).strftime('%H:%M')
+                )
+            return
+
         for symbol_ticker in enabled_symbols:
             try:
                 strategies_for_symbol = self.strategy_manager.strategies.get(symbol_ticker, {})
@@ -492,9 +535,13 @@ class TradingSystem:
                 # Collect signals from each strategy using its own timeframe
                 all_signals = []
                 for strategy_name, strategy in strategies_for_symbol.items():
+                    # Session whitelist: skip if strategy not allowed in current session
+                    if allowed_strategies and strategy_name not in allowed_strategies:
+                        continue
+
                     tf = strategy_timeframes.get(strategy_name, global_primary_tf)
                     bars = self.data_engine.get_bars(symbol_ticker, tf)
-                    
+
                     if len(bars) < min_bars:
                         if self.loop_iteration % 60 == 1:
                             self.logger.info(
@@ -502,7 +549,7 @@ class TradingSystem:
                                 f"{tf} bars for {symbol_ticker}/{strategy_name}"
                             )
                         continue
-                    
+
                     # Check if we already processed this exact bar for this strategy
                     bar_key = f"{symbol_ticker}_{strategy_name}"
                     latest_bar_time = bars.iloc[-1]['timestamp'] if 'timestamp' in bars.columns else bars.index[-1]
