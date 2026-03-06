@@ -373,7 +373,7 @@ class RiskEngine:
                 "Using fixed_lot sizing: %s lots for %s",
                 float(fixed), symbol.ticker
             )
-            return fixed
+            return fixed  # FIXED LOT: Bypass exposure cap completely
 
         # ── Fixed fractional (default): size by % risk ────────────────────
         # 1. Calculate risk-based size (Stop Loss distance)
