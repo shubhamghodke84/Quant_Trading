@@ -113,11 +113,10 @@ class TradingSystem:
         self._last_close_time: Dict[str, datetime] = {}  # 'BUY' or 'SELL' → close timestamp
         self._reversal_buffer_min: int = 5
         
-        # ── NEW: Daily wins counter ───────────────────────────────────────
-        # Stop emitting new signals once max_daily_wins achieved.
-        self._daily_wins: int = 0
+        # ── NEW: Daily profit target ──────────────────────────────────────
+        # Stop emitting new signals once max_daily_profit achieved.
         self._daily_wins_date: Optional[str] = None   # reset at midnight
-        self._max_daily_wins: int = 4   # overridden from config in setup()
+        self._max_daily_profit: float = 120.0  # overridden from config in setup()
         
         # ── NEW: 2-loss consecutive pause ────────────────────────────────
         # After _loss_pause_threshold consecutive losses, suppress signals
@@ -229,7 +228,7 @@ class TradingSystem:
             
             # Read advanced session controls from config
             risk_cfg = self.config.get('risk', {})
-            self._max_daily_wins = risk_cfg.get('max_daily_wins', 4)
+            self._max_daily_profit = float(risk_cfg.get('max_daily_profit_usd', 120.0))
             cb_cfg = risk_cfg.get('circuit_breaker', {})
             self._loss_pause_threshold = cb_cfg.get('loss_pause_consecutive', 2)
             self._loss_pause_duration = cb_cfg.get('loss_pause_minutes', 30) * 60
@@ -426,21 +425,21 @@ class TradingSystem:
 
     def _process_strategies(self) -> None:
         """Process all strategies with per-strategy timeframe routing."""
-        # Reset daily wins counter at midnight UTC
+        # Reset daily tracking at midnight UTC
         today_str = datetime.now(timezone.utc).strftime('%Y-%m-%d')
         if self._daily_wins_date != today_str:
             self._daily_wins_date = today_str
-            self._daily_wins = 0
             self._consecutive_losses_today = 0
             self._loss_pause_until = None
             self.logger.info("[SessionManager] New trading day — counters reset")
 
-        # ── Daily wins gate ───────────────────────────────────────
-        if self._daily_wins >= self._max_daily_wins:
+        # ── Daily profit target gate ──────────────────────────────
+        daily_pnl = float(self.portfolio_engine.daily_realized_pnl + self.portfolio_engine.get_total_unrealized_pnl())
+        if self._max_daily_profit > 0 and daily_pnl >= self._max_daily_profit:
             if self.loop_iteration % 60 == 1:
                 self.logger.info(
                     f"[SessionManager] Daily target reached — "
-                    f"{self._daily_wins}/{self._max_daily_wins} wins. No new signals today."
+                    f"${daily_pnl:.2f} / ${self._max_daily_profit:.2f}. No new signals today."
                 )
             return
 
@@ -824,18 +823,16 @@ class TradingSystem:
 
                         # Session manager counters
                         if pnl > 0:
-                            self._daily_wins += 1
                             self._consecutive_losses_today = 0  # reset on win
+                            current_daily_pnl = float(self.portfolio_engine.daily_realized_pnl)
                             self.logger.info(
                                 f"[SessionManager] WIN recorded \u2014 "
-                                f"daily_wins={self._daily_wins}/{self._max_daily_wins} "
-                                f"pnl=${pnl:.2f}"
+                                f"pnl=${pnl:.2f} | daily total=${current_daily_pnl:.2f}/${self._max_daily_profit:.2f}"
                             )
-                            if self._daily_wins >= self._max_daily_wins:
+                            if self._max_daily_profit > 0 and current_daily_pnl >= self._max_daily_profit:
                                 self.logger.info(
                                     f"[SessionManager] \U0001f3af DAILY TARGET HIT \u2014 "
-                                    f"no more signals today. "
-                                    f"Wins: {self._daily_wins}"
+                                    f"no more signals today."
                                 )
                         else:
                             self._consecutive_losses_today += 1
