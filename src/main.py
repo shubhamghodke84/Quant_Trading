@@ -601,10 +601,11 @@ class TradingSystem:
     def _execute_signal(self, signal) -> None:
         """Execute trading signal."""
         try:
-            # ── Daily wins gate ───────────────────────────────────────
-            if self._daily_wins >= self._max_daily_wins:
+            # ── Daily profit target gate ──────────────────────────────
+            daily_pnl = float(self.portfolio_engine.daily_realized_pnl + self.portfolio_engine.get_total_unrealized_pnl())
+            if self._max_daily_profit > 0 and daily_pnl >= self._max_daily_profit:
                 self.logger.info(
-                    f"[SessionManager] Daily wins target hit — signal suppressed",
+                    f"[SessionManager] Daily target hit (${daily_pnl:.2f}) — signal suppressed",
                     strategy=signal.strategy_name,
                 )
                 return
