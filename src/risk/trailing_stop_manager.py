@@ -111,6 +111,19 @@ class TrailingStopManager:
         else:
             profit_distance = entry - current_price
 
+        # Debug logging every 60 iterations roughly
+        import time
+        if not hasattr(self, '_last_log_time'): self._last_log_time = {}
+        if time.time() - self._last_log_time.get(ticket_str, 0) > 60:
+            logger.debug(
+                f"[TrailingStop] ticket={ticket_str} stage={current_stage} "
+                f"entry={entry:.2f} price={current_price:.2f} "
+                f"profit_dist={profit_distance:.2f} "
+                f"req_stage1={self.breakeven_atr_mult * atr_dist:.2f} "
+                f"req_stage2={self.lock_atr_mult * atr_dist:.2f}"
+            )
+            self._last_log_time[ticket_str] = time.time()
+
         # Stage 2: Lock in partial profit (entry + lock_fraction × atr_dist)
         if current_stage < 2 and profit_distance >= self.lock_atr_mult * atr_dist:
             new_sl = (entry + self.lock_fraction * atr_dist) if is_long else (entry - self.lock_fraction * atr_dist)
