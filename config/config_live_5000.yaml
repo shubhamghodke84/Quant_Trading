@@ -16,10 +16,10 @@ account:
 symbols:
   XAUUSD:
     enabled: true
-    pip_value: 0.01
-    min_lot: 0.02             # Fixed 0.02 lots (0.02 × 75 pips × $10/pip/lot = $15 risk)
-    max_lot: 0.02             # Fixed 0.02 lots — no scaling beyond this
-    lot_step: 0.01
+    pip_value: 0.05
+    min_lot: 0.05             # Fixed 0.02 lots (0.02 × 75 pips × $10/pip/lot = $15 risk)
+    max_lot: 0.05             # Fixed 0.02 lots — no scaling beyond this
+    lot_step: 0.05
     value_per_lot: 100
     commission_per_lot: 0.0
     leverage: 30              # Metals 1:30
@@ -76,22 +76,22 @@ risk:
   # ABSOLUTE DOLLAR LOSS/PROFIT LIMITS
   absolute_max_loss_usd: 125      # Daily loss limit ($5k × 2.5%)
   max_drawdown_usd: 300           # Overall drawdown limit ($5k × 6%)
-  max_daily_profit_usd: 120       # Stop trading for the day once $120 profit hit (~3-4 winning trades)
+  max_daily_profit_usd: 1205       # Stop trading for the day once $120 profit hit (~3-4 winning trades)
 
-  max_positions: 2
+  max_positions: 3
   max_daily_trades: 50
   max_exposure_per_symbol_pct: 5.0
-  max_daily_wins: 4               # Stop trading once 4 wins hit ($120+ target)
+  max_daily_wins: 40               # Stop trading once 4 wins hit ($120+ target)
 
   position_sizing:
     method: fixed_lot
-    fixed_lot: 0.02
+    fixed_lot: 0.05
 
   circuit_breaker:
     enabled: true
-    max_consecutive_losses: 5      # Kill switch (hard stop)
+    max_consecutive_losses: 6      # Kill switch (hard stop)
     cooldown_minutes: 15
-    loss_pause_consecutive: 2      # Soft pause after 2 consecutive losses
+    loss_pause_consecutive: 3      # Soft pause after 2 consecutive losses
     loss_pause_minutes: 30         # Pause for 30 minutes then resume
 
   trailing_stop:
@@ -280,9 +280,9 @@ file_bridge:
   enabled: true
   # ── MT5 data directory ──────────────────────────────────────────────────────
   # Windows 11 (native MT5, no Wine — uncomment the line below):
-  # data_dir: "C:/Users/<YourWindowsUsername>/AppData/Roaming/MetaQuotes/Terminal/Common/Files"
+  # data_dir: "C:/Users/Shubham Ghodke/AppData/Roaming/MetaQuotes/Terminal/Common/Files"
   # macOS (MT5 under Wine — active by default):
-  data_dir: "~/Library/Application Support/net.metaquotes.wine.metatrader5/drive_c/users/user/AppData/Roaming/MetaQuotes/Terminal/Common/Files"
+  # data_dir: "~/Library/Application Support/net.metaquotes.wine.metatrader5/drive_c/users/user/AppData/Roaming/MetaQuotes/Terminal/Common/Files"
   check_interval_ms: 100
 
 shutdown:
