@@ -492,6 +492,7 @@ void ProcessCommands()
    if(command == "HEARTBEAT")           HandleHeartbeat();
    else if(command == "GET_ACCOUNT_INFO") HandleGetAccountInfo();
    else if(command == "GET_POSITIONS")    HandleGetPositions();
+   else if(command == "GET_HISTORY")      HandleGetHistory(commandJson);
    else if(command == "PLACE_ORDER")      HandlePlaceOrder(commandJson);
    else if(command == "CLOSE_POSITION")   HandleClosePosition(commandJson);
    else if(command == "MODIFY_ORDER")     HandleModifyOrder(commandJson);
@@ -563,13 +564,66 @@ void HandleGetPositions()
          json += "\"profit\":" + DoubleToString(PositionGetDouble(POSITION_PROFIT), 2) + ",";
          json += "\"sl\":" + DoubleToString(PositionGetDouble(POSITION_SL), _Digits) + ",";
          json += "\"tp\":" + DoubleToString(PositionGetDouble(POSITION_TP), _Digits) + ",";
-         json += "\"comment\":\"" + PositionGetString(POSITION_COMMENT) + "\"";
+         json += "\"comment\":\"" + PositionGetString(POSITION_COMMENT) + "\",";
+         json += "\"magic\":" + IntegerToString(PositionGetInteger(POSITION_MAGIC));
          json += "}";
          count++;
       }
    }
    json += "]}";
    WriteResponse(json);
+}
+
+void HandleGetHistory(string json)
+{
+   int minutes = (int)StringToInteger(ExtractJsonValue(json, "minutes"));
+   if (minutes <= 0) minutes = 1440; // Default 24h
+   
+   datetime endTime = TimeCurrent();
+   datetime startTime = endTime - (minutes * 60);
+   
+   if(!HistorySelect(startTime, endTime))
+   {
+      WriteResponse("{\"status\":\"ERROR\",\"message\":\"Failed to select history\"}");
+      return;
+   }
+   
+   string resp = "{\"status\":\"SUCCESS\",\"deals\":[";
+   int total = HistoryDealsTotal();
+   int count = 0;
+   
+   for(int i = 0; i < total; i++)
+   {
+      ulong ticket = HistoryDealGetTicket(i);
+      if(ticket > 0)
+      {
+         // We only care about OUT deals (closing positions) from our EA
+         long entryType = HistoryDealGetInteger(ticket, DEAL_ENTRY);
+         long magic = HistoryDealGetInteger(ticket, DEAL_MAGIC);
+         
+         if(entryType == DEAL_ENTRY_OUT && magic == 55555)
+         {
+            if(count > 0) resp += ",";
+            
+            resp += "{";
+            resp += "\"ticket\":" + IntegerToString(ticket) + ",";
+            resp += "\"position_ticket\":" + IntegerToString(HistoryDealGetInteger(ticket, DEAL_POSITION_ID)) + ",";
+            resp += "\"symbol\":\"" + HistoryDealGetString(ticket, DEAL_SYMBOL) + "\",";
+            resp += "\"type\":" + IntegerToString(HistoryDealGetInteger(ticket, DEAL_TYPE)) + ",";
+            resp += "\"volume\":" + DoubleToString(HistoryDealGetDouble(ticket, DEAL_VOLUME), 2) + ",";
+            resp += "\"price\":" + DoubleToString(HistoryDealGetDouble(ticket, DEAL_PRICE), _Digits) + ",";
+            resp += "\"profit\":" + DoubleToString(HistoryDealGetDouble(ticket, DEAL_PROFIT), 2) + ",";
+            resp += "\"swap\":" + DoubleToString(HistoryDealGetDouble(ticket, DEAL_SWAP), 2) + ",";
+            resp += "\"commission\":" + DoubleToString(HistoryDealGetDouble(ticket, DEAL_COMMISSION), 2) + ",";
+            resp += "\"comment\":\"" + HistoryDealGetString(ticket, DEAL_COMMENT) + "\",";
+            resp += "\"time\":" + IntegerToString(HistoryDealGetInteger(ticket, DEAL_TIME));
+            resp += "}";
+            count++;
+         }
+      }
+   }
+   resp += "]}";
+   WriteResponse(resp);
 }
 
 void HandlePlaceOrder(string json)
@@ -630,7 +684,9 @@ void HandlePlaceOrder(string json)
    request.tp = tp;
    request.deviation = 20;
    request.magic = 55555;
-   request.comment = "PythonBridge";
+   
+   string pyComment = ExtractJsonValue(json, "comment");
+   request.comment = (pyComment != "") ? pyComment : "PythonBridge";
    request.type_filling = GetFillingMode(symbol);
    
    double requestedPrice = request.price;
@@ -832,21 +888,33 @@ string ExtractJsonValue(string json, string key)
    
    start += StringLen(search);
    
+   // Skip spaces
    while(start < StringLen(json))
    {
       ushort charCode = StringGetCharacter(json, start);
-      if(charCode != ' ' && charCode != '"' && charCode != ':') break;
+      if(charCode != ' ' && charCode != '\t') break;
       start++;
+   }
+
+   bool isString = false;
+   ushort firstChar = StringGetCharacter(json, start);
+   if (firstChar == '"') {
+      isString = true;
+      start++; // skip the opening quote
    }
    
    int end = -1;
-   int endComma = StringFind(json, ",", start);
-   int endBrace = StringFind(json, "}", start);
-   int endQuote = StringFind(json, "\"", start);
-   
-   if(endComma != -1) end = endComma;
-   if(endBrace != -1 && (end == -1 || endBrace < end)) end = endBrace;
-   if(endQuote != -1 && (endQuote > start) && (end == -1 || endQuote < end)) end = endQuote;
+   if (isString) {
+      // Find the closing quote, careful of escaped strings if complex
+      end = StringFind(json, "\"", start);
+   } else {
+      // It's a number/boolean. Find nearest comma or closing brace
+      int endComma = StringFind(json, ",", start);
+      int endBrace = StringFind(json, "}", start);
+      
+      if(endComma != -1) end = endComma;
+      if(endBrace != -1 && (end == -1 || endBrace < end)) end = endBrace;
+   }
    
    if(end == -1) return "";
    

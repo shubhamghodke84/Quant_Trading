@@ -18,7 +18,7 @@ import os
 import signal
 import time
 from pathlib import Path
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import argparse
 
 # ── setup paths ──────────────────────────────────────────────────────
@@ -70,7 +70,12 @@ def load_trades(days: int = 30):
         return df
 
     df["exit_time"] = pd.to_datetime(df["exit_time"], errors="coerce")
-    cutoff = datetime.now() - timedelta(days=days)
+    
+    # Ensure exit_time and cutoff are both timezone-aware (or both naive)
+    if df["exit_time"].dt.tz is None:
+        df["exit_time"] = df["exit_time"].dt.tz_localize("UTC")
+        
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
     df = df[df["exit_time"] >= cutoff].copy()
     df.sort_values("exit_time", ascending=False, inplace=True)
     return df
