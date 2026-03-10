@@ -1,14 +1,10 @@
 import pandas as pd
-from pathlib import Path
 from datetime import datetime, timedelta
 
-PROJECT_ROOT = Path(__file__).parent.parent
-
 def main():
-    journal_path = PROJECT_ROOT / "data" / "logs" / "trade_journal.csv"
     try:
-        df = pd.read_csv(journal_path)
-
+        # Load the trade journal
+        df = pd.read_csv('/Users/varadbandekar/Documents/Quant_trading/data/logs/trade_journal.csv')
     except Exception as e:
         print(f"Error loading trade journal: {e}")
         return

@@ -1,13 +1,11 @@
 #!/usr/bin/env python3
 """Check EA bridge status file to debug data collection."""
-import json, os, sys
-from pathlib import Path
+import json, os
 
-# Cross-platform MT5 path detection
-sys.path.insert(0, str(Path(__file__).parent.parent))
-from mt5_bridge.mt5_file_client import MT5FileClient
-
-path = MT5FileClient._get_default_mt5_path() / "mt5_status.json"
+path = os.path.expanduser(
+    "~/Library/Application Support/net.metaquotes.wine.metatrader5"
+    "/drive_c/users/user/AppData/Roaming/MetaQuotes/Terminal/Common/Files/mt5_status.json"
+)
 
 results = []
 

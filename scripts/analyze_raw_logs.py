@@ -1,14 +1,9 @@
 import re
 import glob
-from pathlib import Path
 from collections import defaultdict
 
-PROJECT_ROOT = Path(__file__).parent.parent
-
 def parse_logs():
-    log_pattern = str(PROJECT_ROOT / "data" / "logs" / "trading_system_live.log*")
-    log_files = glob.glob(log_pattern)
-
+    log_files = glob.glob("/Users/varadbandekar/Documents/Quant_trading/data/logs/trading_system_live.log*")
     log_files.sort(key=lambda x: -int(x.split('.')[-1]) if x[-1].isdigit() else 0)
 
     # Track strategies by signal ID or order ID
