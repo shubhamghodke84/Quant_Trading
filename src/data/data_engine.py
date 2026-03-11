@@ -86,15 +86,19 @@ class DataEngine:
                     timeframe=tf
                 )
     
-    def preload_historical_bars(self, bars_count: int = 200) -> Dict[str, int]:
+    def preload_historical_bars(self, bars_count: int = 2000) -> Dict[str, int]:
         """
         Preload historical bars from yfinance on startup.
         
         Fetches recent 1m candles so strategies can evaluate immediately
         instead of waiting 22-130 minutes to build bars from live ticks.
         
+        bars_count=2000 is required for kalman_regime:
+          min_bars = rv_ma_window(100) + rv_window(20) + 10 = 130 * 15m bars
+          130 15m bars × 15 min/bar = 1950 1m bars minimum.
+        
         Args:
-            bars_count: Number of bars to preload (default 200, enough for all strategies)
+            bars_count: Number of 1m bars to preload (default 2000, enough for all strategies)
             
         Returns:
             Dict of {symbol: bars_loaded}
@@ -117,9 +121,11 @@ class DataEngine:
             try:
                 import yfinance as yf
                 
-                # Fetch 1m data (yfinance max for 1m is 7 days)
+                # Fetch 1m data (yfinance allows up to 7d for 1m interval)
+                # Use '5d' to ensure we get enough bars for all strategies,
+                # especially kalman_regime which needs 130 15m bars (= 1950 1m bars).
                 ticker = yf.Ticker(yf_ticker)
-                hist = ticker.history(period="1d", interval="1m")
+                hist = ticker.history(period="5d", interval="1m")
                 
                 if hist.empty:
                     logger.warning(f"No yfinance data for {symbol_ticker}")
