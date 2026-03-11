@@ -531,6 +531,17 @@ class TradingSystem:
         if sessions_cfg:
             now_utc = datetime.now(timezone.utc)
             now_hhmm = now_utc.strftime('%H:%M')
+
+            # ── Friday cutoff: no new trades after cutoff UTC time ────────────
+            friday_cutoff = self.config.get('trading_hours', {}).get('friday_cutoff_utc', '19:00')
+            if now_utc.weekday() == 4 and now_hhmm >= friday_cutoff:  # 4 = Friday
+                if self.loop_iteration % 60 == 1:
+                    self.logger.info(
+                        f"[SessionManager] Friday cutoff ({friday_cutoff} UTC) — "
+                        "no new trades until Monday. Protecting against weekend gap."
+                    )
+                return
+
             for session in sessions_cfg:
                 if not session.get('enabled', True):
                     continue
@@ -546,12 +557,16 @@ class TradingSystem:
                     session_strats = session.get('strategies', [])
                     if session_strats:
                         allowed_strategies.update(session_strats)
-                    # else: empty = all allowed
+                    # Capture lot multiplier for this session
+                    self._current_session_lot_multiplier = float(
+                        session.get('lot_size_multiplier', 1.0)
+                    )
                     if self.loop_iteration % 120 == 1:
                         self.logger.info(
                             f"[Session] Active: {session['name']} "
                             f"({sstart}-{send} UTC) strategies="
-                            f"{session_strats if session_strats else 'ALL'}"
+                            f"{session_strats if session_strats else 'ALL'} "
+                            f"lot_mult={self._current_session_lot_multiplier:.2f}"
                         )
                     break  # first matching session wins
 
@@ -603,6 +618,11 @@ class TradingSystem:
                         )
 
                 for _, signal in all_signals:
+                    # Inject session lot-size multiplier into signal metadata
+                    # ExecutionEngine reads this and scales position_size accordingly
+                    signal.metadata['lot_size_multiplier'] = getattr(
+                        self, '_current_session_lot_multiplier', 1.0
+                    )
                     self._execute_signal(signal)
                     
             except Exception as e:
