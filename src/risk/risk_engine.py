@@ -370,8 +370,9 @@ class RiskEngine:
         if sizing_cfg.get('method') == 'fixed_lot':
             fixed = Decimal(str(sizing_cfg.get('fixed_lot', '0.01')))
             self.logger.debug(
-                "Using fixed_lot sizing: %s lots for %s",
-                float(fixed), symbol.ticker
+                "Using fixed_lot sizing",
+                lots=float(fixed),
+                symbol=symbol.ticker
             )
             return fixed  # FIXED LOT: Bypass exposure cap completely
 
