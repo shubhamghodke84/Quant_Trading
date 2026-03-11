@@ -154,7 +154,20 @@ class ExecutionEngine:
                     signal_id=signal_id
                 )
                 return None
-            
+
+            # Apply session lot-size multiplier (e.g. 0.5 for Asian, 0.75 for NY Evening)
+            # Set by main.py via signal.metadata['lot_size_multiplier']
+            lot_multiplier = float(signal.metadata.get('lot_size_multiplier', 1.0))
+            if lot_multiplier != 1.0:
+                adjusted = Decimal(str(lot_multiplier)) * position_size
+                # Clamp to broker minimum (0.01 lots) and round to 2 dp
+                position_size = max(Decimal('0.01'), adjusted.quantize(Decimal('0.01')))
+                self.logger.info(
+                    f"[SessionLot] Lot multiplier {lot_multiplier:.2f} applied: "
+                    f"{float(adjusted):.2f} → {float(position_size):.2f} lots",
+                    strategy=signal.strategy_name
+                )
+
             # 2. Create order from signal
             order = Order(
                 symbol=signal.symbol,

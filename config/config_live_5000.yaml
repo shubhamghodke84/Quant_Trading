@@ -205,44 +205,64 @@ strategies:
     news_filter: true
 
 trading_hours:
+  # Friday cutoff: no NEW trades after this UTC time on Fridays (weekend gap protection)
+  friday_cutoff_utc: "19:00"
+
   sessions:
     # ── ASIAN SESSION ─────────────────────────────────────────────────────────
-    # Tokyo/Singapore active. Gold trends slowly in one direction.
-    # Best strategies: Kalman (trend) + Breakout (range break). Avoid mean reversion.
-    # Times in UTC | IST equivalent: 07:00-11:30
+    # Tokyo/Singapore. Gold drifts slowly. Lower volume → use HALF lot size.
+    # ML=TREND  → breakout + kalman fire on directional drifts
+    # ML=RANGE  → vwap + kalman trade mean-reversion quietly
+    # Times UTC | IST: 07:00-11:30
     - name: asian
       start: "01:30"             # 07:00 IST
       end: "06:00"               # 11:30 IST
       enabled: true
-      strategies: [breakout, kalman_regime]  # kalman_regime added: catches slow Asian trends on 15m bars
+      lot_size_multiplier: 0.5   # ← HALF size in thin Asian market (0.01 lots)
+      strategies: [breakout, kalman_regime, vwap]
 
     # ── LONDON OPEN ───────────────────────────────────────────────────────────
-    # Highest volatility, biggest moves. All strategies allowed.
-    # Times in UTC | IST equivalent: 12:30-15:00
+    # 🔥 Highest volatility. Biggest directional breakouts of the day.
+    # Full lot size. All trend + range strategies eligible.
+    # Times UTC | IST: 12:30-15:00
     - name: london_open
       start: "07:00"             # 12:30 IST
       end: "09:30"               # 15:00 IST
       enabled: true
+      lot_size_multiplier: 1.0   # Full size
       strategies: [breakout, momentum, kalman_regime, vwap]
 
-    # ── NY OPEN ───────────────────────────────────────────────────────────────
-    # High volatility, strong continuation moves after London direction is set.
-    # Times in UTC | IST equivalent: 17:30-20:00
+    # ── LONDON CONTINUATION / NY PRE-MARKET ───────────────────────────────────
+    # London still active, NY traders positioning before open.
+    # Strong momentum continuations + VWAP reversion from London spike.
+    # Times UTC | IST: 15:00-17:30
+    - name: london_ny_overlap
+      start: "09:30"             # 15:00 IST
+      end: "12:00"               # 17:30 IST
+      enabled: true
+      lot_size_multiplier: 1.0   # Full size — still high liquidity
+      strategies: [breakout, momentum, kalman_regime, vwap]
+
+    # ── NY OPEN / LONDON-NY OVERLAP ───────────────────────────────────────────
+    # 🔥 NY session opens. London + NY both active → highest combined liquidity.
+    # Best for momentum continuations in the established London direction.
+    # Times UTC | IST: 17:30-20:00
     - name: new_york_open
       start: "12:00"             # 17:30 IST
       end: "14:30"               # 20:00 IST
       enabled: true
+      lot_size_multiplier: 1.0   # Full size
       strategies: [breakout, momentum, kalman_regime, vwap]
 
     # ── NY EVENING / LATE SESSION ─────────────────────────────────────────────
-    # Post-NYSE hours. Gold often trends in the direction set by NY open.
-    # Lower volume but clean continuation moves. No institutional VWAP so
-    # vwap strategy is disabled. Mean reversion less reliable in thin markets.
-    # Times in UTC | IST equivalent: 20:00 IST (8 PM) → 02:00 IST (2 AM)
+    # Post-NYSE. Lower volume. Clean trends when ML=TREND, noisy otherwise.
+    # NOTE: ML override auto-disables breakout/momentum on RANGE days.
+    # Times UTC | IST: 20:00 IST → 02:00 IST
     - name: ny_evening
-      start: "14:30"             # 20:00 IST (8 PM)
-      end: "20:30"               # 02:00 IST (2 AM next day)
+      start: "14:30"             # 20:00 IST
+      end: "20:30"               # 02:00 IST next day
       enabled: true
+      lot_size_multiplier: 0.75  # Slightly reduced — thinner market
       strategies: [breakout, momentum, kalman_regime]
 
   news_filter:
@@ -252,7 +272,7 @@ trading_hours:
     impacts:
       - high
       - red
-    buffer_min: 5               # 5-minute buffer (Issue #2 requirement)
+    buffer_min: 5               # 5-minute buffer
     timezone: Asia/Kolkata
 
 monitoring:
