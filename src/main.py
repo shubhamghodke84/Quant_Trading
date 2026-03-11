@@ -108,6 +108,9 @@ class TradingSystem:
         
         # Track last processed bar timestamps to prevent signal spam
         self._last_processed_bars: Dict[str, datetime] = {}
+
+        # Regime ML override (written nightly by scripts/regime_classifier.py)
+        self._regime_override: Optional[dict] = None
         
         # The5ers: directional lock + 5-min reversal buffer state
         self._last_close_time: Dict[str, datetime] = {}  # 'BUY' or 'SELL' → close timestamp
@@ -174,7 +177,7 @@ class TradingSystem:
             # 3b. Preload historical bars from yfinance (eliminates 22+ min startup delay)
             self.logger.info("   Preloading historical bars...")
             try:
-                preload_results = self.data_engine.preload_historical_bars(bars_count=200)
+                preload_results = self.data_engine.preload_historical_bars(bars_count=2000)
                 for sym, count in preload_results.items():
                     self.logger.info(f"   ✓ {sym}: {count} bars preloaded")
             except Exception as e:
@@ -305,9 +308,12 @@ class TradingSystem:
             self.logger.info("=" * 60)
             self.logger.info("✓ ALL SYSTEMS OPERATIONAL")
             self.logger.info("=" * 60)
-            
+
+            # 10b. Load ML regime override (if fresh, written by nightly classifier)
+            self._apply_regime_override()
+
             return True
-            
+
         except Exception as e:
             self.logger.error(
                 "Setup failed",
@@ -446,7 +452,10 @@ class TradingSystem:
             self._loss_pause_until = None
             self.logger.info("[SessionManager] New trading day — counters reset")
 
-            # ── Reset RiskEngine daily metrics (was never called before) ──────
+            # ── Run nightly regime classifier in background ───────────────────
+            self._run_nightly_classifier()
+
+            # ── Reset RiskEngine daily metrics ────────────────────────────────
             # This refreshes: daily_trades_count, daily_start_equity,
             # and gives the equity HWM a chance to update to today's starting equity.
             try:
@@ -603,6 +612,103 @@ class TradingSystem:
                     error=str(e)
                 )
     
+
+    def _apply_regime_override(self) -> None:
+        """
+        Read data/config_override.json (written by scripts/regime_classifier.py)
+        and apply ML-recommended strategy enable/disable settings.
+
+        Silently skips if:
+         - File doesn't exist (first run)
+         - File is stale (>24 hours old)
+         - Any parsing or strategy-manager error
+        """
+        import json as _json
+        from datetime import timezone as _tz
+
+        override_path = PROJECT_ROOT / "data" / "config_override.json"
+        if not override_path.exists():
+            self.logger.info("[RegimeML] No config_override.json found — running without ML override")
+            return
+
+        try:
+            with open(override_path) as f:
+                override = _json.load(f)
+
+            # Staleness check (>24 h = ignore)
+            generated = datetime.fromisoformat(override.get("generated_at", "2000-01-01T00:00:00+00:00"))
+            if generated.tzinfo is None:
+                generated = generated.replace(tzinfo=_tz.utc)
+            age_hours = (datetime.now(_tz.utc) - generated).total_seconds() / 3600
+            if age_hours > 24:
+                self.logger.info(
+                    f"[RegimeML] config_override.json is {age_hours:.1f}h old — ignoring (run classifier to refresh)"
+                )
+                return
+
+            regime = override.get("regime", "UNKNOWN")
+            confidence = override.get("confidence", 0.0)
+            overrides = override.get("strategy_overrides", {})
+
+            self.logger.info(
+                f"[RegimeML] Applying ML override: regime={regime} confidence={confidence:.0%} "
+                f"(generated {age_hours:.1f}h ago)"
+            )
+            self._regime_override = override
+
+            # Apply enable/disable to each symbol's strategy manager
+            for symbol_ticker, strategies in self.strategy_manager.strategies.items():
+                for strat_name, strategy_obj in strategies.items():
+                    if strat_name in overrides:
+                        should_enable = overrides[strat_name]
+                        if should_enable:
+                            strategy_obj.enable()
+                        else:
+                            strategy_obj.disable()
+                        self.logger.info(
+                            f"[RegimeML]   {'✅' if should_enable else '❌'}  {strat_name} → "
+                            f"{'enabled' if should_enable else 'disabled'}"
+                        )
+
+        except Exception as e:
+            self.logger.warning(f"[RegimeML] Could not apply override: {e} — continuing with config defaults")
+
+    def _run_nightly_classifier(self) -> None:
+        """
+        Spawn scripts/regime_classifier.py in a background daemon thread
+        at midnight UTC so it never blocks the trading loop.
+        Output is logged to data/logs/regime_classifier.log.
+        """
+        import threading
+        import subprocess
+
+        def _run():
+            try:
+                classifier_script = PROJECT_ROOT / "scripts" / "regime_classifier.py"
+                log_path = PROJECT_ROOT / "data" / "logs" / "regime_classifier.log"
+                log_path.parent.mkdir(parents=True, exist_ok=True)
+
+                self.logger.info("[RegimeML] Starting nightly classifier in background...")
+                with open(log_path, "a") as logf:
+                    result = subprocess.run(
+                        [sys.executable, str(classifier_script)],
+                        cwd=str(PROJECT_ROOT),
+                        capture_output=False,
+                        stdout=logf,
+                        stderr=logf,
+                        timeout=120,
+                    )
+                if result.returncode == 0:
+                    self.logger.info("[RegimeML] Classifier finished — loading new override")
+                    self._apply_regime_override()
+                else:
+                    self.logger.warning(f"[RegimeML] Classifier exited with code {result.returncode}")
+            except Exception as e:
+                self.logger.warning(f"[RegimeML] Classifier thread error: {e}")
+
+        t = threading.Thread(target=_run, daemon=True, name="RegimeClassifier")
+        t.start()
+
 
     def _get_effective_account_info(self) -> Dict[str, Decimal]:
         """
