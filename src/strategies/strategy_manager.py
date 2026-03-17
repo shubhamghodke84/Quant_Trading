@@ -20,6 +20,7 @@ from .mean_reversion_strategy import MeanReversionStrategy
 from .vwap_strategy import VWAPStrategy
 from .momentum_strategy import MomentumStrategy
 from .kalman_regime_strategy import KalmanRegimeStrategy
+from .mini_medallion_strategy import MiniMedallionStrategy
 from ..core.types import Symbol, Signal
 
 
@@ -76,6 +77,13 @@ class StrategyManager:
                 self.strategies[symbol.ticker]['kalman_regime'] = KalmanRegimeStrategy(
                     symbol=symbol,
                     config=config.get('strategies', {}).get('kalman_regime', {})
+                )
+            
+            # Initialize Mini-Medallion strategy if enabled
+            if config.get('strategies', {}).get('mini_medallion', {}).get('enabled', False):
+                self.strategies[symbol.ticker]['mini_medallion'] = MiniMedallionStrategy(
+                    symbol=symbol,
+                    config=config.get('strategies', {}).get('mini_medallion', {})
                 )
         
         from ..monitoring.logger import get_logger
