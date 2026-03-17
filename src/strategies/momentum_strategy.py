@@ -68,6 +68,9 @@ class MomentumStrategy(BaseStrategy):
         # Minimum signal strength to emit a signal
         self.min_signal_strength = config.get('min_signal_strength', 0.65)
 
+        # ML Meta-labeling Filter (Optional)
+        self.ml_dynamic_exhaustion = config.get('ml_dynamic_exhaustion', False)
+
         # Regime filter
         self.regime_filter = RegimeFilter()
 
@@ -175,7 +178,17 @@ class MomentumStrategy(BaseStrategy):
             if risk <= 0:
                 self._log_no_signal("Invalid risk calculation (risk <= 0)")
                 return None
-            take_profit = current_close + (risk * self.rr_ratio)
+            
+            # Dynamic TP based on ML momentum exhaustion prediction
+            # Mocked from diagnostics output
+            if self.ml_dynamic_exhaustion:
+                 predicted_pips = self.config.get('diagnostics', {}).get('predicted_momentum_pips', None)
+                 if predicted_pips is not None and predicted_pips > 0:
+                      take_profit = current_close + predicted_pips
+                 else:
+                      take_profit = current_close + (risk * self.rr_ratio)
+            else:
+                 take_profit = current_close + (risk * self.rr_ratio)
 
             rsi_strength = min(abs(current_rsi - 50) / 30, 0.4)
             adx_strength = min(current_adx / 100.0, 0.35)
@@ -231,7 +244,16 @@ class MomentumStrategy(BaseStrategy):
             if risk <= 0:
                 self._log_no_signal("Invalid risk calculation (risk <= 0)")
                 return None
-            take_profit = current_close - (risk * self.rr_ratio)
+            
+            # Dynamic TP based on ML momentum exhaustion prediction
+            if self.ml_dynamic_exhaustion:
+                 predicted_pips = self.config.get('diagnostics', {}).get('predicted_momentum_pips', None)
+                 if predicted_pips is not None and predicted_pips > 0:
+                      take_profit = current_close - predicted_pips
+                 else:
+                      take_profit = current_close - (risk * self.rr_ratio)
+            else:
+                 take_profit = current_close - (risk * self.rr_ratio)
 
             rsi_strength = min(abs(50 - current_rsi) / 30, 0.4)
             adx_strength = min(current_adx / 100.0, 0.35)

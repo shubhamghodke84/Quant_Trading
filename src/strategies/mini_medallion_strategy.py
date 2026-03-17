@@ -87,9 +87,9 @@ class MiniMedallionStrategy(BaseStrategy):
         # Decision threshold logic
         side = None
         if alpha_score > self.score_threshold:
-            side = OrderSide.LONG
+            side = OrderSide.BUY
         elif alpha_score < -self.score_threshold:
-            side = OrderSide.SHORT
+            side = OrderSide.SELL
             
         if side is None:
             return None
@@ -102,11 +102,11 @@ class MiniMedallionStrategy(BaseStrategy):
         stop_dist = current_atr * self.risk_atr_multiplier
         take_profit_dist = stop_dist * self.rr_ratio
         
-        if side == OrderSide.LONG:
+        if side == OrderSide.BUY:
             sl = current_price - stop_dist
             tp = current_price + take_profit_dist
             strength = min((alpha_score - self.score_threshold) / 2.0, 1.0) # Normalize 0 to 1 a bit
-        else: # SHORT
+        else: # SELL
             sl = current_price + stop_dist
             tp = current_price - take_profit_dist
             strength = min((abs(alpha_score) - self.score_threshold) / 2.0, 1.0)

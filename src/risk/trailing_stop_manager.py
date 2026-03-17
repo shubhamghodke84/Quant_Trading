@@ -15,7 +15,7 @@ MODIFY_ORDER command (requires EA_FileBridge.mq5 to support MODIFY_ORDER).
 
 from typing import Dict, Optional
 from decimal import Decimal
-from datetime import datetime, timezone
+import datetime as dt
 
 from ..monitoring.logger import get_logger
 
@@ -43,6 +43,9 @@ class TrailingStopManager:
 
         # Stage 2: move SL to partial lock when profit >= lock_atr_mult × ATR distance
         self.lock_atr_mult: float = trail_cfg.get('lock_atr_mult', 1.5)
+
+        # Stage 3 (ML): move SL tighter when nearing momentum exhaustion
+        self.ml_exhaustion_factor = trail_cfg.get('ml_exhaustion_factor', 0.8)
 
         # Fraction of ATR to lock in at stage 2 (0.5 = lock in half the expected move)
         self.lock_fraction: float = trail_cfg.get('lock_fraction', 0.5)
@@ -170,12 +173,12 @@ class TrailingStopManager:
             if _opened_attr is not None:
                 opened_at = _opened_attr
             elif hasattr(pos, 'metadata') and pos.metadata.get('time_setup'):
-                opened_at = datetime.fromtimestamp(pos.metadata['time_setup'], tz=timezone.utc)
+                opened_at = dt.datetime.fromtimestamp(pos.metadata['time_setup'], tz=dt.timezone.utc)
             else:
                 opened_at = None
 
             if opened_at is not None:
-                duration_minutes = (datetime.now(timezone.utc) - opened_at).total_seconds() / 60.0
+                duration_minutes = (dt.datetime.now(dt.timezone.utc) - opened_at).total_seconds() / 60.0
                 if duration_minutes >= self.time_stop_minutes:
                     logger.info(
                         f"[TimeStop] Closing ticket={ticket_str} after {duration_minutes:.1f} minutes "
@@ -184,6 +187,32 @@ class TrailingStopManager:
                     # Use connector to close position
                     connector.close_position(position_id=ticket_str, symbol=getattr(pos.symbol, 'ticker', ''))
                     return
+
+        # ── Stage 3 (ML): Aggressive Trail on Exhaustion approach ──
+        # If strategy metadata contains an ML exhaustion distance, auto-trail much tighter
+        ml_exhaustion_dist = None
+        if hasattr(pos, 'metadata'):
+            ml_exhaustion_dist = float(pos.metadata.get('predicted_momentum_pips', 0.0) or 0.0)
+            
+        if current_stage < 3 and ml_exhaustion_dist and ml_exhaustion_dist > 0:
+            if profit_distance >= (ml_exhaustion_dist * self.ml_exhaustion_factor):
+                # Lock in 80% of the movement since we're near the predicted exhaustion
+                tight_lock = profit_distance * 0.8
+                new_sl = (entry + tight_lock) if is_long else (entry - tight_lock)
+                
+                if (is_long and new_sl > current_sl) or (not is_long and new_sl < current_sl):
+                    success = connector.modify_position(
+                        position_id=ticket_str,
+                        stop_loss=Decimal(str(round(new_sl, 5))),
+                        take_profit=current_tp_decimal
+                    )
+                    if success:
+                        self._stage[ticket_str] = 3
+                        logger.info(
+                            f"[TrailingStop] 🚀 Stage 3 ML EXHAUSTION: ticket={ticket_str} "
+                            f"new_sl={new_sl:.5f} (locked 80% of current {profit_distance:.2f} due to ML prediction)"
+                        )
+                return
 
         # ── Stage 2: Lock in partial profit (entry + lock_fraction × atr_dist) ──
         if current_stage < 2 and profit_distance >= self.lock_atr_mult * atr_dist:

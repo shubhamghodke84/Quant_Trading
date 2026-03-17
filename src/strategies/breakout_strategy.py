@@ -70,6 +70,9 @@ class BreakoutStrategy(BaseStrategy):
         self.mtf_confirmation = config.get('mtf_confirmation', False)
         self.mtf_filter = MultiTimeframeFilter() if self.mtf_confirmation else None
 
+        # ML Meta-labeling Filter (Optional)
+        self.max_ml_fakeout_prob = config.get('max_ml_fakeout_prob', 1.0) # 1.0 = disabled
+
         # Regime filter
         self.regime_filter = RegimeFilter(
             adx_trend_threshold=15,
@@ -199,6 +202,14 @@ class BreakoutStrategy(BaseStrategy):
                     self._log_no_signal("MTF confirmation failed for BUY")
                     return None
 
+            # ML Fakeout Prediction Gate
+            # Note: In a complete implementation, this would query the loaded ML model pipeline
+            # with current features. For now, we mock/read from strategy metadata if available.
+            ml_fakeout_prob = self.config.get('diagnostics', {}).get('fakeout_prob', 0.0)
+            if ml_fakeout_prob > self.max_ml_fakeout_prob:
+                 self._log_no_signal(f"ML rejected: fakeout probability too high ({ml_fakeout_prob:.2f} > {self.max_ml_fakeout_prob})")
+                 return None
+
             atr_stop = current_close - (self.atr_stop_multiplier * current_atr)
             channel_stop = breakout_lower
             stop_loss = max(atr_stop, channel_stop)
@@ -280,6 +291,12 @@ class BreakoutStrategy(BaseStrategy):
                 if not self.mtf_filter.confirm_signal('SELL', self._pending_bars_by_tf):
                     self._log_no_signal("MTF confirmation failed for SELL")
                     return None
+
+            # ML Fakeout Prediction Gate
+            ml_fakeout_prob = self.config.get('diagnostics', {}).get('fakeout_prob', 0.0)
+            if ml_fakeout_prob > self.max_ml_fakeout_prob:
+                 self._log_no_signal(f"ML rejected: fakeout probability too high ({ml_fakeout_prob:.2f} > {self.max_ml_fakeout_prob})")
+                 return None
 
             atr_stop = current_close + (self.atr_stop_multiplier * current_atr)
             channel_stop = breakout_upper

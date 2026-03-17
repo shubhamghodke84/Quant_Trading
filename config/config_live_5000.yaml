@@ -100,6 +100,7 @@ risk:
     lock_atr_mult: 1.5             # Move SL to partial lock at +1.5× risk distance
     lock_fraction: 0.5             # Lock in 50% of original risk at stage 2
     time_stop_minutes: 45          # Close position if open for more than 45 minutes
+    ml_exhaustion_factor: 0.8      # (ML ONLY) If exhaustion pipeline generates predicted pips, tight_lock 80% of it immediately when reached
 
   # Session windows: only trade London open (7-9am) and NY open (12-2pm UTC)
   # (enforced by trading_hours sessions below)

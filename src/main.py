@@ -704,6 +704,17 @@ class TradingSystem:
 
         def _run():
             try:
+                # ── Dump live bars for the ML script ────────────────
+                try:
+                    store = self.data_engine.candle_stores.get("XAUUSD", {}).get("5m")
+                    if store:
+                        csv_path = PROJECT_ROOT / "data" / "logs" / "candle_store_XAUUSD_5m.csv"
+                        csv_path.parent.mkdir(parents=True, exist_ok=True)
+                        store.to_csv(str(csv_path))
+                        self.logger.info(f"[RegimeML] Dumped {len(store)} live 5m bars for ML processing")
+                except Exception as data_err:
+                    self.logger.warning(f"[RegimeML] Failed to dump live bars: {data_err}")
+
                 classifier_script = PROJECT_ROOT / "scripts" / "regime_classifier.py"
                 log_path = PROJECT_ROOT / "data" / "logs" / "regime_classifier.log"
                 log_path.parent.mkdir(parents=True, exist_ok=True)

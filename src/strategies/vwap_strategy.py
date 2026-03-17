@@ -45,6 +45,9 @@ class VWAPStrategy(BaseStrategy):
         self.cci_oversold_entry = config.get('cci_oversold_entry', -100)   # BUY below this
         self.cci_overbought_entry = config.get('cci_overbought_entry', 100)  # SELL above this
         self.cci_period = config.get('cci_period', 20)
+        
+        # ML Meta-labeling Filter (Optional)
+        self.ml_dynamic_zscore = config.get('ml_dynamic_zscore', False)
 
         # Regime filter
         self.regime_filter = RegimeFilter()
@@ -88,10 +91,17 @@ class VWAPStrategy(BaseStrategy):
             self._log_no_signal(f"Regime is {regime.value}, need {self.only_in_regime.value}")
             return None
 
+        # Dynamic ML-driven VWAP Standard Deviation Overrides
+        effective_multiplier = self.atr_multiplier
+        if self.ml_dynamic_zscore:
+             ml_multiplier = self.config.get('diagnostics', {}).get('vwap_dynamic_mult', None)
+             if ml_multiplier is not None and ml_multiplier > 0:
+                  effective_multiplier = ml_multiplier
+
         # Calculate indicators
         vwap, upper_band, lower_band = Indicators.vwap_deviation(
             bars,
-            atr_multiplier=self.atr_multiplier
+            atr_multiplier=effective_multiplier
         )
         atr = Indicators.atr(bars, period=self.atr_period)
         rsi = Indicators.rsi(bars, period=14)

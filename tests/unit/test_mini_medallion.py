@@ -92,7 +92,7 @@ class TestMiniMedallionStrategy:
         
         # We expect a long signal because momentum burst + mean reversion will trigger
         assert signal is not None
-        assert signal.side == OrderSide.LONG
+        assert signal.side == OrderSide.BUY
         assert 'alpha_score' in signal.metadata
         
     def test_strong_downward_momentum_generates_short(self, symbol):
@@ -106,7 +106,7 @@ class TestMiniMedallionStrategy:
         signal = strategy.on_bar(bars)
         
         assert signal is not None
-        assert signal.side == OrderSide.SHORT
+        assert signal.side == OrderSide.SELL
         assert 'alpha_score' in signal.metadata
         
     def test_high_threshold_prevents_trades(self, symbol):
