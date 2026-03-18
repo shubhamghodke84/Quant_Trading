@@ -271,27 +271,36 @@ def run_classifier(bars_file: Path = None) -> dict:
     print(f"🤖  Nightly Regime Classifier — {now_utc.strftime('%Y-%m-%d %H:%M UTC')}")
     print(f"{'='*60}\n")
 
-    # ── Load bars ────────────────────────────────────────────────
-    sources = [
-        bars_file,
-        LIVE_LOG_BARS,
-        DEFAULT_BARS,
-    ]
-    df_5m = None
-    used_source = None
+    # ── Load and Stitch bars ─────────────────────────────────────
+    # Combine the long-term static history with the recent live data.
+    sources = [DEFAULT_BARS, LIVE_LOG_BARS]
+    if bars_file:
+        sources.append(bars_file)
+
+    dfs = []
     for src in sources:
         if src and Path(src).exists():
             try:
-                df_5m = pd.read_csv(src)
+                df_src = pd.read_csv(src)
+                if df_src.empty:
+                    continue
                 # Normalize column names
-                df_5m.columns = [c.lower() for c in df_5m.columns]
-                if "timestamp" not in df_5m.columns and "time" in df_5m.columns:
-                    df_5m = df_5m.rename(columns={"time": "timestamp"})
-                used_source = src
-                print(f"📂  Loaded {len(df_5m):,} 5m bars from: {Path(src).name}")
-                break
+                df_src.columns = [c.lower() for c in df_src.columns]
+                if "timestamp" not in df_src.columns and "time" in df_src.columns:
+                    df_src = df_src.rename(columns={"time": "timestamp"})
+                # Normalize timestamp types to prevent naive/aware comparison crashes
+                df_src["timestamp"] = pd.to_datetime(df_src["timestamp"], utc=True)
+                dfs.append(df_src)
+                print(f"📂  Loaded {len(df_src):,} 5m bars from: {Path(src).name}")
             except Exception as e:
                 print(f"   ⚠️  Could not load {src}: {e}")
+
+    df_5m = None
+    if dfs:
+        df_5m = pd.concat(dfs, ignore_index=True)
+        df_5m = df_5m.drop_duplicates(subset=["timestamp"], keep="last")
+        df_5m = df_5m.sort_values("timestamp").reset_index(drop=True)
+        print(f"🔗  Stitched total {len(df_5m):,} unique 5m bars")
 
     if df_5m is None or len(df_5m) < 50:
         print("⚠️  Insufficient data — using rule-based classification only.")

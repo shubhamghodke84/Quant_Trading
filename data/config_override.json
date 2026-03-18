@@ -1,9 +1,9 @@
 {
-  "generated_at": "2026-03-18T09:53:12.970547+00:00",
-  "valid_until": "2026-03-19T09:53:12.970547+00:00",
+  "generated_at": "2026-03-18T12:00:53.745639+00:00",
+  "valid_until": "2026-03-19T12:00:53.745639+00:00",
   "regime": "RANGE",
-  "confidence": 0.52,
-  "classifier": "rule-based (no features)",
+  "confidence": 0.556,
+  "classifier": "RandomForest (n=40 samples)",
   "strategy_overrides": {
     "breakout": false,
     "momentum": false,
@@ -12,5 +12,14 @@
     "vwap": true,
     "mini_medallion": true
   },
-  "diagnostics": {}
+  "diagnostics": {
+    "adx_14": 57.330053,
+    "atr_pct": 0.065172,
+    "bb_width_ratio": 5.553415,
+    "close_ema20_pct": 0.760692,
+    "momentum_1d": -0.001738,
+    "momentum_5d": 1.346685,
+    "range_atr_ratio": 0.125567,
+    "vol_ratio": 0.114271
+  }
 }
