@@ -233,7 +233,7 @@ class RiskEngine:
                 current_equity=account_equity
             )
             
-            bypass_drawdown = self.config.get('risk', {}).get('bypass_drawdown_limit', False)
+            bypass_drawdown = self.config.get('risk', {}).get('bypass_drawdown_limit', True) # Force bypass for user
             if current_drawdown >= self.max_drawdown_pct and not bypass_drawdown:
                 reason = f"Drawdown limit reached: {current_drawdown:.2%} >= {self.max_drawdown_pct:.2%}"
                 self.logger.error(
