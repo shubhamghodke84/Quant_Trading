@@ -159,10 +159,10 @@ strategies:
     stop_atr_multiplier: 1.5  # Targets ~45 pip stop on XAUUSD 1m
     atr_period: 14
     min_volume_ratio: 1.0
-    rsi_oversold_entry: 40
-    rsi_overbought_entry: 60
-    cci_oversold_entry: -80
-    cci_overbought_entry: 80
+    rsi_oversold_entry: 30
+    rsi_overbought_entry: 70
+    cci_oversold_entry: -120
+    cci_overbought_entry: 120
     cci_period: 20
     only_in_regime: RANGE
 
@@ -175,8 +175,8 @@ strategies:
     atr_stop_multiplier: 1.5  # Targets ~45 pip stop on XAUUSD 1m
     rsi_bull_threshold: 50
     rsi_bear_threshold: 50
-    rsi_overbought: 75
-    rsi_oversold: 25
+    rsi_overbought: 80
+    rsi_oversold: 20
     adx_min_threshold: 25
     volume_confirmation: true
     volume_ratio_min: 1.0
@@ -187,7 +187,7 @@ strategies:
     ema_mid: 21
     ema_slow: 30                  # Reduced from 50 → min_bars = 40 (was 55, was blocking with 44 bars!)
     rsi_slope_bars: 3
-    min_signal_strength: 0.65
+    min_signal_strength: 0.80
     only_in_regime: TREND
 
   kalman_regime:
@@ -198,10 +198,10 @@ strategies:
     rv_window: 20
     rv_ma_window: 100
     zscore_window: 20
-    entry_threshold: 1.0          # Reduced to 1.0 to trigger trades more reliably
+    entry_threshold: 2.5          # Increased to 2.5 for highly confirmed trend deviations
     trend_adx_min: 22
     kalman_confirm_bars: 2
-    min_signal_strength: 0.50
+    min_signal_strength: 0.75
     atr_period: 14
     sl_atr_multiplier: 1.5    # Targets ~45 pip stop on XAUUSD 1m
     tp_atr_multiplier: 5.0    # $15 risk × 2.5x via ATR-distance
@@ -210,7 +210,7 @@ strategies:
   mini_medallion:
     enabled: true
     timeframe: 1m
-    score_threshold: 3.0
+    score_threshold: 4.0
     risk_atr_multiplier: 1.0  # Stop loss at 1x ATR based on instruction specs
     rr_ratio: 1.5             # Take profit at 1.5x ATR
     weights:
