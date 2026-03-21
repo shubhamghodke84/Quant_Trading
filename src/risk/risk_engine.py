@@ -375,8 +375,12 @@ class RiskEngine:
         # ── Fixed lot mode: always use exactly the configured lot size ─────
         if sizing_cfg.get('method') == 'fixed_lot':
             fixed = Decimal(str(sizing_cfg.get('fixed_lot', '0.01')))
+            # Clamp the fixed lot strictly to the symbol boundaries so users can securely override
+            # global position sizes via config `max_lot` for expensive instruments like crypto
+            fixed = max(symbol.min_lot, min(symbol.max_lot, fixed))
+            
             self.logger.debug(
-                "Using fixed_lot sizing",
+                "Using fixed_lot sizing with boundaries",
                 lots=float(fixed),
                 symbol=symbol.ticker
             )

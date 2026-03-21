@@ -28,7 +28,7 @@ symbols:
     enabled: true
     pip_value: 0.1
     min_lot: 0.01
-    max_lot: 2.0
+    max_lot: 0.01             # Lowered max limit for crypto margin safety
     lot_step: 0.01
     value_per_lot: 1
     commission_per_lot: 0.0

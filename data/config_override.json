@@ -1,6 +1,6 @@
 {
-  "generated_at": "2026-03-21T07:47:45.355584+00:00",
-  "valid_until": "2026-03-22T07:47:45.355584+00:00",
+  "generated_at": "2026-03-21T07:51:46.604576+00:00",
+  "valid_until": "2026-03-22T07:51:46.604576+00:00",
   "regime": "RANGE",
   "confidence": 0.6273,
   "classifier": "RandomForest (n=39 samples)",
