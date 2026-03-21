@@ -25,7 +25,7 @@ symbols:
     leverage: 30              # Metals 1:30
 
   BTCUSD:
-    enabled: false
+    enabled: true
     pip_value: 0.1
     min_lot: 0.01
     max_lot: 2.0
