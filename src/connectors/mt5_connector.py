@@ -219,15 +219,18 @@ class MT5Connector:
             rounded_tp = round(float(take_profit), 2) if take_profit else None
             rounded_price = round(float(price), 2) if price else None
             
-            # Enforce minimum stops distance (brokers reject SL/TP too close to entry)
-            min_stops_distance = 1.0  # $1.00 minimum for BTCUSD
+            # Enforce minimum stops distance dynamically (John Carmack / Kevin Mitnick rules)
+            # Brokers reject SL/TP too close to entry. Read this dynamically from config.
+            sym_config = self._get_or_create_symbol(symbol)
+            min_stops_distance = float(getattr(sym_config, 'min_stops_distance', 1.0))
+
             if rounded_price and rounded_sl:
                 if abs(rounded_price - rounded_sl) < min_stops_distance:
                     if side == OrderSide.BUY:
                         rounded_sl = round(rounded_price - min_stops_distance, 2)
                     else:
                         rounded_sl = round(rounded_price + min_stops_distance, 2)
-                    logger.warning("SL adjusted to meet minimum distance: %s", rounded_sl)
+                    logger.warning("SL adjusted to meet broker minimum distance: %s", rounded_sl)
             
             if rounded_price and rounded_tp:
                 if abs(rounded_price - rounded_tp) < min_stops_distance:
@@ -235,7 +238,7 @@ class MT5Connector:
                         rounded_tp = round(rounded_price + min_stops_distance, 2)
                     else:
                         rounded_tp = round(rounded_price - min_stops_distance, 2)
-                    logger.warning("TP adjusted to meet minimum distance: %s", rounded_tp)
+                    logger.warning("TP adjusted to meet broker minimum distance: %s", rounded_tp)
             
             response = self.client.place_order(
                 symbol=mapped_symbol,
@@ -514,7 +517,42 @@ class MT5Connector:
                 value_per_lot=Decimal(str(sym_cfg.get('value_per_lot', '1.0'))),
                 commission_per_lot=Decimal(str(sym_cfg.get('commission_per_lot', '0.0')))
             )
+            # Dynamically attach stops distance to help Carmack rule
+            setattr(self.symbols_cache[ticker], 'min_stops_distance', Decimal(str(sym_cfg.get('min_stops_distance', '1.0'))))
         return self.symbols_cache[ticker]
+    
+    def is_market_open(self, symbol: str, max_age_seconds: int = 120) -> bool:
+        """
+        Check if the market for a given symbol is open.
+        
+        George Hotz rule: Don't guess, use system ground truth.
+        A market is considered dead/closed if we haven't received a live tick 
+        in the last `max_age_seconds` (assuming EA pushes ticks continuously).
+        """
+        try:
+            status = self.client.get_status()
+            
+            quotes = status.get('quotes', {})
+            mapped_symbol = self._symbol_map.get(symbol, symbol)
+            
+            if mapped_symbol in quotes:
+                quote = quotes[mapped_symbol]
+                # If we have an MT5 server timestamp in the quote, check it
+                if 'time_ms' in quote:
+                    # EA puts milliseconds since epoch
+                    server_age = datetime.now(timezone.utc).timestamp() - (quote['time_ms'] / 1000.0)
+                    if server_age > max_age_seconds:
+                        return False
+            
+            # Additional logic: MT5 EA might export `market_open: bool` globally or per symbol
+            if 'market_open' in status:
+                return bool(status['market_open'])
+
+            return True  # Optimistic fallback if EA doesn't support timestamps
+            
+        except Exception as e:
+            logger.warning("Failed to check if market is open: %s", e)
+            return False
     
     def check_connection_health(self) -> bool:
         """Check if connection is healthy."""

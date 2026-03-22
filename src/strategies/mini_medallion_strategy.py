@@ -27,8 +27,6 @@ class MiniMedallionStrategy(BaseStrategy):
         
         self.timeframe = config.get('timeframe', '1m')
         self.score_threshold = config.get('score_threshold', 3.0)
-        self.risk_atr_multiplier = config.get('risk_atr_multiplier', 1.0)
-        self.rr_ratio = config.get('rr_ratio', 1.5)
         self.fixed_lot = config.get('fixed_lot', None)
         
         # Signal Weights
@@ -99,23 +97,16 @@ class MiniMedallionStrategy(BaseStrategy):
         current_adx = float(adx.iloc[-1])
         regime = MarketRegime.TREND if current_adx > 25 else MarketRegime.RANGE
 
-        # Risk Management Params
-        stop_dist = current_atr * self.risk_atr_multiplier
-        take_profit_dist = stop_dist * self.rr_ratio
-        
         if side == OrderSide.BUY:
-            sl = current_price - stop_dist
-            tp = current_price + take_profit_dist
             strength = min((alpha_score - self.score_threshold) / 2.0, 1.0) # Normalize 0 to 1 a bit
         else: # SELL
-            sl = current_price + stop_dist
-            tp = current_price - take_profit_dist
             strength = min((abs(alpha_score) - self.score_threshold) / 2.0, 1.0)
 
         # Metadata processing
         metadata = {
             'alpha_score': round(alpha_score, 2),
-            'signals': signals
+            'signals': signals,
+            'atr': float(current_atr)
         }
         if self.fixed_lot:
             metadata['fixed_lot'] = self.fixed_lot
@@ -126,8 +117,6 @@ class MiniMedallionStrategy(BaseStrategy):
             strength=strength,
             regime=regime,
             entry_price=current_price,
-            stop_loss=sl,
-            take_profit=tp,
             metadata=metadata
         )
 

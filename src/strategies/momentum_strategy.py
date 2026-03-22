@@ -34,9 +34,7 @@ class MomentumStrategy(BaseStrategy):
 
         # Strategy parameters
         self.rsi_period = config.get('rsi_period', 14)
-        self.ema_period = config.get('ema_period', 20)
-        self.rr_ratio = config.get('rr_ratio', 2.0)
-        self.atr_stop_multiplier = config.get('atr_stop_multiplier', 2.0)
+        # Risk parameters removed (handled by RiskProcessor)
         self.only_in_regime = MarketRegime[config.get('only_in_regime', 'TREND')]
 
         # RSI thresholds
@@ -98,8 +96,16 @@ class MomentumStrategy(BaseStrategy):
                        self.rsi_period + 5,
                        self.ema_slow + 5)
         if len(bars) < min_bars:
-            self._log_no_signal("Insufficient data")
+            if getattr(self, '_momentum_logged_warmup', False) is False:
+                self._log_no_signal("Insufficient data")
+                self._momentum_logged_warmup = True
             return None
+        self._momentum_logged_warmup = False
+
+        # --- LATENCY FIX (Jeff Dean / Jonathan Blow) ---
+        # Recalculating indicators on 2000+ bars every minute is O(N).
+        # We only need the trailing window to warm up EMAs (400 bars is plenty).
+        bars = bars.tail(400)
 
         # Check regime
         regime = self.regime_filter.classify(bars)
@@ -173,23 +179,6 @@ class MomentumStrategy(BaseStrategy):
                 rsi_rising and macd_positive and macd_accelerating and
                 price_above_ema and volume_ok):
 
-            stop_loss = current_close - (self.atr_stop_multiplier * current_atr)
-            risk = current_close - stop_loss
-            if risk <= 0:
-                self._log_no_signal("Invalid risk calculation (risk <= 0)")
-                return None
-            
-            # Dynamic TP based on ML momentum exhaustion prediction
-            # Mocked from diagnostics output
-            if self.ml_dynamic_exhaustion:
-                 predicted_pips = self.config.get('diagnostics', {}).get('predicted_momentum_pips', None)
-                 if predicted_pips is not None and predicted_pips > 0:
-                      take_profit = current_close + predicted_pips
-                 else:
-                      take_profit = current_close + (risk * self.rr_ratio)
-            else:
-                 take_profit = current_close + (risk * self.rr_ratio)
-
             rsi_strength = min(abs(current_rsi - 50) / 30, 0.4)
             adx_strength = min(current_adx / 100.0, 0.35)
             slope_bonus = 0.1 if current_rsi_slope > 2 else 0.05
@@ -206,8 +195,6 @@ class MomentumStrategy(BaseStrategy):
                 strength=strength,
                 regime=regime,
                 entry_price=float(current_close),
-                stop_loss=float(stop_loss),
-                take_profit=float(take_profit),
                 metadata={
                     'strategy': 'momentum_scalp',
                     'rsi': float(current_rsi),
@@ -239,22 +226,6 @@ class MomentumStrategy(BaseStrategy):
                 rsi_falling and macd_negative and macd_deepening and
                 price_below_ema and volume_ok):
 
-            stop_loss = current_close + (self.atr_stop_multiplier * current_atr)
-            risk = stop_loss - current_close
-            if risk <= 0:
-                self._log_no_signal("Invalid risk calculation (risk <= 0)")
-                return None
-            
-            # Dynamic TP based on ML momentum exhaustion prediction
-            if self.ml_dynamic_exhaustion:
-                 predicted_pips = self.config.get('diagnostics', {}).get('predicted_momentum_pips', None)
-                 if predicted_pips is not None and predicted_pips > 0:
-                      take_profit = current_close - predicted_pips
-                 else:
-                      take_profit = current_close - (risk * self.rr_ratio)
-            else:
-                 take_profit = current_close - (risk * self.rr_ratio)
-
             rsi_strength = min(abs(50 - current_rsi) / 30, 0.4)
             adx_strength = min(current_adx / 100.0, 0.35)
             slope_bonus = 0.1 if current_rsi_slope < -2 else 0.05
@@ -271,8 +242,6 @@ class MomentumStrategy(BaseStrategy):
                 strength=strength,
                 regime=regime,
                 entry_price=float(current_close),
-                stop_loss=float(stop_loss),
-                take_profit=float(take_profit),
                 metadata={
                     'strategy': 'momentum_scalp',
                     'rsi': float(current_rsi),

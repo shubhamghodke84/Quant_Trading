@@ -59,10 +59,8 @@ class KalmanRegimeStrategy(BaseStrategy):
         self.zscore_window = config.get('zscore_window', 20)
         self.entry_threshold = config.get('entry_threshold', 2.5)
 
-        # ATR-based risk management
+        # ATR-based risk management delegates to RiskProcessor
         self.atr_period = config.get('atr_period', 14)
-        self.sl_atr_mult = config.get('sl_atr_multiplier', 2.5)
-        self.tp_atr_mult = config.get('tp_atr_multiplier', 2.0)
 
         # ADX gate raised from 15 to 22 — avoids choppy/low-trend markets
         self.trend_adx_min = config.get('trend_adx_min', 22)
@@ -128,9 +126,6 @@ class KalmanRegimeStrategy(BaseStrategy):
         if current_atr <= 0 or pd.isna(current_atr):
             self._log_no_signal("ATR unavailable")
             return None
-
-        stop_distance = self.sl_atr_mult * current_atr
-        tp_distance = self.tp_atr_mult * current_atr
 
         # ── 6. Signal generation ────────────────────────────────────────────
         side = None
@@ -199,21 +194,14 @@ class KalmanRegimeStrategy(BaseStrategy):
                 f"Kalman signal strength too low ({strength:.2f} < {self.min_signal_strength})")
             return None
 
-        # ── 7. Compute SL / TP ──────────────────────────────────────────────
-        if side == OrderSide.BUY:
-            stop_loss = current_close - stop_distance
-            take_profit = current_close + tp_distance
-        else:
-            stop_loss = current_close + stop_distance
-            take_profit = current_close - tp_distance
+        # ── 7. Delegation ───────────────────────────────────────────────────
+        # SL/TP is managed by RiskProcessor based on metadata parameters
 
         return self._create_signal(
             side=side,
             strength=strength,
             regime=regime,
             entry_price=current_close,
-            stop_loss=stop_loss,
-            take_profit=take_profit,
             metadata={
                 'strategy': 'kalman_regime',
                 'mode': 'trend' if is_trend else 'range',
@@ -221,8 +209,6 @@ class KalmanRegimeStrategy(BaseStrategy):
                 'zscore': current_z,
                 'adx': current_adx,
                 'rsi': current_rsi,
-                'atr': current_atr,
-                'sl_distance': stop_distance,
-                'tp_distance': tp_distance,
+                'atr': current_atr
             }
         )

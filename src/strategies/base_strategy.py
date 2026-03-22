@@ -143,4 +143,11 @@ class BaseStrategy(ABC):
     
     def _log_no_signal(self, reason: str) -> None:
         """Log why no signal was generated (INFO so it's visible in normal logs)."""
-        self.logger.info(f"No signal: {reason}")
+        if not hasattr(self, '_last_no_signal_reason'):
+            self._last_no_signal_reason = None
+            
+        if reason != self._last_no_signal_reason:
+            self.logger.info(f"No signal: {reason}")
+            self._last_no_signal_reason = reason
+        else:
+            self.logger.debug(f"No signal: {reason}")

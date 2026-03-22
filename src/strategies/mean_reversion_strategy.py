@@ -138,66 +138,37 @@ class MeanReversionStrategy(BaseStrategy):
         atr = Indicators.atr(bars, period=14)
         current_atr = float(atr.iloc[-1]) if not pd.isna(atr.iloc[-1]) else current_close * 0.002
         
-        # Stop distance is 2.5x ATR
-        stop_dist = current_atr * 2.5
-        
         # Buy Signal (Oversold)
         if current_z < entry_thresh_long:
-            # Target: VWAP
-            take_profit = vwap
-            
-            # Stop: ATR-based
-            stop_loss = current_close - stop_dist
-            
-            # Safety checks for targets
-            if take_profit <= current_close: 
-                take_profit = current_close + (current_atr * 0.5)
-            if stop_loss >= current_close:
-                stop_loss = current_close - stop_dist
-                
             return self._create_signal(
                 side=OrderSide.BUY,
                 strength=min(abs(current_z) / 3, 1.0),
                 regime=regime,
                 entry_price=current_close,
-                stop_loss=stop_loss,
-                take_profit=take_profit,
                 metadata={
                     'zscore': float(current_z),
                     'half_life': float(current_hl),
                     'lookback': self.current_lookback,
                     'threshold': float(entry_thresh_long),
-                    'vwap': vwap
+                    'vwap': vwap,
+                    'atr': float(current_atr)
                 }
             )
             
         # Sell Signal (Overbought)
         elif current_z > entry_thresh_short:
-            # Target: VWAP
-            take_profit = vwap
-            
-            # Stop: ATR-based
-            stop_loss = current_close + stop_dist
-            
-            # Safety checks for targets
-            if take_profit >= current_close:
-                take_profit = current_close - (current_atr * 0.5)
-            if stop_loss <= current_close:
-                stop_loss = current_close + stop_dist
-                
             return self._create_signal(
                 side=OrderSide.SELL,
                 strength=min(abs(current_z) / 3, 1.0),
                 regime=regime,
                 entry_price=current_close,
-                stop_loss=stop_loss,
-                take_profit=take_profit,
                 metadata={
                     'zscore': float(current_z),
                     'half_life': float(current_hl),
                     'lookback': self.current_lookback,
                     'threshold': float(entry_thresh_short),
-                    'vwap': vwap
+                    'vwap': vwap,
+                    'atr': float(current_atr)
                 }
             )
             

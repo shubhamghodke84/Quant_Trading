@@ -41,6 +41,7 @@ from ..risk.risk_engine import RiskEngine
 
 from .order_manager import OrderManager
 from .fill_handler import FillHandler
+from ..risk.risk_processor import RiskProcessor
 
 
 class ExecutionEngine:
@@ -71,6 +72,7 @@ class ExecutionEngine:
         # Sub-components
         self.order_manager = OrderManager()
         self.fill_handler = FillHandler()
+        self.risk_processor = RiskProcessor(risk_engine.config)
         
         # Logging
         from ..monitoring.logger import get_logger
@@ -128,6 +130,19 @@ class ExecutionEngine:
                                 strategy=signal.strategy_name
                             )
                             return None
+
+            # 0.5. MARKET SESSION CHECK - George Hotz rule: check if market is actually open
+            if not self.connector.is_market_open(signal.symbol.ticker):
+                self.logger.warning(
+                    "Signal rejected - market appears closed (no recent ticks)",
+                    signal_id=signal_id,
+                    symbol=signal.symbol.ticker,
+                    strategy=signal.strategy_name
+                )
+                return None
+            
+            # 0.75 Calculate Stops via Ritchie RiskProcessor
+            signal = self.risk_processor.calculate_stops(signal)
             
             # 1. Calculate position size
             if not signal.entry_price or not signal.stop_loss:

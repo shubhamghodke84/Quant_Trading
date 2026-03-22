@@ -39,11 +39,8 @@ class BreakoutStrategy(BaseStrategy):
         # Strategy parameters
         self.donchian_period = config.get('donchian_period', 20)
         self.confirmation_bars = config.get('confirmation_bars', 0)
-        self.rr_ratio = config.get('rr_ratio', 2.0)
+        # Risk logic moved to RiskProcessor
         self.only_in_regime = MarketRegime[config.get('only_in_regime', 'TREND')]
-
-        # ATR-based stop loss
-        self.atr_stop_multiplier = config.get('atr_stop_multiplier', 2.0)
 
         # ADX minimum for trend confirmation
         self.adx_min_threshold = config.get('adx_min_threshold', 25)
@@ -210,18 +207,7 @@ class BreakoutStrategy(BaseStrategy):
                  self._log_no_signal(f"ML rejected: fakeout probability too high ({ml_fakeout_prob:.2f} > {self.max_ml_fakeout_prob})")
                  return None
 
-            atr_stop = current_close - (self.atr_stop_multiplier * current_atr)
-            channel_stop = breakout_lower
-            stop_loss = max(atr_stop, channel_stop)
-
-            risk = current_close - stop_loss
-            if risk <= 0:
-                self._log_no_signal("Invalid risk calculation (risk <= 0)")
-                return None
-
-            take_profit = current_close + (risk * self.rr_ratio)
-
-            # Signal strength: ADX + BB squeeze depth + MTF bonus
+            # Gate on minimum strength
             base_strength = 0.55
             adx_bonus = min(current_adx / 100.0, 0.25)
             # Deeper squeeze (lower relative width) = stronger breakout potential
@@ -241,14 +227,10 @@ class BreakoutStrategy(BaseStrategy):
                 strength=strength,
                 regime=regime,
                 entry_price=float(current_close),
-                stop_loss=float(stop_loss),
-                take_profit=float(take_profit),
                 metadata={
                     'breakout_type': 'upper',
                     'donchian_upper': float(breakout_upper),
                     'donchian_lower': float(breakout_lower),
-                    'risk': float(risk),
-                    'rr_ratio': self.rr_ratio,
                     'atr': float(current_atr),
                     'rsi': float(current_rsi),
                     'adx': float(current_adx),
@@ -298,17 +280,6 @@ class BreakoutStrategy(BaseStrategy):
                  self._log_no_signal(f"ML rejected: fakeout probability too high ({ml_fakeout_prob:.2f} > {self.max_ml_fakeout_prob})")
                  return None
 
-            atr_stop = current_close + (self.atr_stop_multiplier * current_atr)
-            channel_stop = breakout_upper
-            stop_loss = min(atr_stop, channel_stop)
-
-            risk = stop_loss - current_close
-            if risk <= 0:
-                self._log_no_signal("Invalid risk calculation (risk <= 0)")
-                return None
-
-            take_profit = current_close - (risk * self.rr_ratio)
-
             base_strength = 0.55
             adx_bonus = min(current_adx / 100.0, 0.25)
             squeeze_depth = max(0, (bb_width_avg - current_bb_width) / bb_width_avg)
@@ -326,14 +297,10 @@ class BreakoutStrategy(BaseStrategy):
                 strength=strength,
                 regime=regime,
                 entry_price=float(current_close),
-                stop_loss=float(stop_loss),
-                take_profit=float(take_profit),
                 metadata={
                     'breakout_type': 'lower',
                     'donchian_upper': float(breakout_upper),
                     'donchian_lower': float(breakout_lower),
-                    'risk': float(risk),
-                    'rr_ratio': self.rr_ratio,
                     'atr': float(current_atr),
                     'rsi': float(current_rsi),
                     'adx': float(current_adx),

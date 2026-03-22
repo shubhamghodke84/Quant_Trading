@@ -23,6 +23,8 @@ symbols:
     value_per_lot: 100
     commission_per_lot: 0.0
     leverage: 30              # Metals 1:30
+    min_stops_distance: 1.0   # 100 pips min distance for Gold
+
 
   BTCUSD:
     enabled: true
@@ -33,6 +35,8 @@ symbols:
     value_per_lot: 1
     commission_per_lot: 0.0
     leverage: 2               # Crypto 1:2
+    min_stops_distance: 5.0   # $5.00 min distance for Bitcoin
+
 
   EURUSD:
     enabled: true
@@ -43,6 +47,8 @@ symbols:
     value_per_lot: 100000
     commission_per_lot: 0.0
     leverage: 100             # FX 1:100
+    min_stops_distance: 0.00050 # 5 pip min distance
+
 
   US30:
     enabled: false

@@ -31,8 +31,7 @@ class VWAPStrategy(BaseStrategy):
         super().__init__(symbol, config)
 
         # Strategy parameters
-        self.atr_multiplier = config.get('atr_multiplier', 1.5)
-        self.stop_atr_multiplier = config.get('stop_atr_multiplier', 2.0)
+        # Risk logic removed (handled by RiskProcessor)
         self.atr_period = config.get('atr_period', 14)
         self.min_volume_ratio = config.get('min_volume_ratio', 1.0)
         self.only_in_regime = MarketRegime[config.get('only_in_regime', 'RANGE')]
@@ -73,8 +72,17 @@ class VWAPStrategy(BaseStrategy):
 
         min_bars = max(self.atr_period + 5, 20, self.cci_period + 5)
         if len(bars) < min_bars:
-            self._log_no_signal("Insufficient data")
+            if getattr(self, '_vwap_logged_warmup', False) is False:
+                self._log_no_signal("vwap_deviation | No signal: Insufficient data")
+                self._vwap_logged_warmup = True
             return None
+        self._vwap_logged_warmup = False
+
+        # --- LATENCY FIX (Jeff Dean / Jonathan Blow) ---
+        # Recalculating indicators on 2000+ bars every minute is O(N).
+        # We only need the trailing window. 800 bars is roughly one full active session.
+        bars = bars.tail(800)
+
 
         # Check regime on a higher timeframe if possible to avoid intraday noise overriding the daily setup
         try:
@@ -116,8 +124,11 @@ class VWAPStrategy(BaseStrategy):
         current_cci = cci.iloc[-1]
 
         if any(pd.isna([current_vwap, current_atr, current_rsi, current_cci])):
-            self._log_no_signal("VWAP, ATR, RSI or CCI calculation failed")
+            if getattr(self, '_vwap_logged_calc_error', False) is False:
+                self._log_no_signal("No signal: VWAP, ATR, RSI or CCI calculation failed")
+                self._vwap_logged_calc_error = True
             return None
+        self._vwap_logged_calc_error = False
 
         # Volume check (when data is available)
         if 'volume' in bars.columns:
@@ -142,16 +153,6 @@ class VWAPStrategy(BaseStrategy):
                     f"CCI not oversold for BUY ({current_cci:.1f} >= {self.cci_oversold_entry})")
                 return None
 
-            stop_loss = current_close - (self.stop_atr_multiplier * current_atr)
-            take_profit = current_vwap  # Target: revert to VWAP
-
-            # Ensure positive R:R (VWAP must be above entry by at least the stop distance)
-            risk = current_close - stop_loss
-            reward = take_profit - current_close
-            if risk <= 0 or reward <= 0:
-                self._log_no_signal("Invalid R:R for VWAP BUY")
-                return None
-
             deviation_pct = (current_vwap - current_close) / current_vwap * 100
             rsi_extreme = max(0, (self.rsi_oversold_entry - current_rsi) / self.rsi_oversold_entry)
             cci_extreme = max(0, (-current_cci - 100) / 100)
@@ -162,8 +163,6 @@ class VWAPStrategy(BaseStrategy):
                 strength=strength,
                 regime=regime,
                 entry_price=float(current_close),
-                stop_loss=float(stop_loss),
-                take_profit=float(take_profit),
                 metadata={
                     'strategy': 'vwap_deviation',
                     'vwap': float(current_vwap),
@@ -190,15 +189,6 @@ class VWAPStrategy(BaseStrategy):
                     f"CCI not overbought for SELL ({current_cci:.1f} <= {self.cci_overbought_entry})")
                 return None
 
-            stop_loss = current_close + (self.stop_atr_multiplier * current_atr)
-            take_profit = current_vwap  # Target: revert to VWAP
-
-            risk = stop_loss - current_close
-            reward = current_close - take_profit
-            if risk <= 0 or reward <= 0:
-                self._log_no_signal("Invalid R:R for VWAP SELL")
-                return None
-
             deviation_pct = (current_close - current_vwap) / current_vwap * 100
             rsi_extreme = max(0, (current_rsi - self.rsi_overbought_entry) / (100 - self.rsi_overbought_entry))
             cci_extreme = max(0, (current_cci - 100) / 100)
@@ -209,8 +199,6 @@ class VWAPStrategy(BaseStrategy):
                 strength=strength,
                 regime=regime,
                 entry_price=float(current_close),
-                stop_loss=float(stop_loss),
-                take_profit=float(take_profit),
                 metadata={
                     'strategy': 'vwap_deviation',
                     'vwap': float(current_vwap),
