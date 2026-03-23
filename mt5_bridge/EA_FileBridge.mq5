@@ -12,7 +12,7 @@
 input string CommandFile = "mt5_commands.json";
 input string StatusFile = "mt5_status.json";
 input string ResponseFile = "mt5_responses.json";
-input int CommandCheckIntervalMs = 100;  // Poll commands every 100ms
+input int CommandCheckIntervalMs = 20;   // Poll commands every 20ms (Institutional speed)
 input int StatusUpdateIntervalMs = 1000; // Write status every 1000ms (1s)
 
 //--- Input parameters - RISK MANAGEMENT (CRITICAL FOR LIVE TRADING)
@@ -131,18 +131,11 @@ void OnTimer()
    // 1. Check for panic close
    CheckPanicClose();
    
-   // 2. Process Commands (Every timer tick - 100ms)
+   // 2. Process Commands (Every timer tick - 20ms)
    ProcessCommands();
    
-   // 3. Write Status (Throttled to 1000ms)
-   static uint lastStatusTime = 0;
-   uint currentTime = GetTickCount();
-   
-   if(currentTime - lastStatusTime >= (uint)StatusUpdateIntervalMs)
-   {
-      WriteStatus();
-      lastStatusTime = currentTime;
-   }
+   // 3. Write Status (Throttled to 1000ms AND State-Delta)
+   WriteStatus();
 }
 
 //+------------------------------------------------------------------+
@@ -386,14 +379,36 @@ bool ValidateOrder(string symbol, double volume)
 //+------------------------------------------------------------------+
 //| Write current status to file                                     |
 //+------------------------------------------------------------------+
-//+------------------------------------------------------------------+
-//| Write current status to file                                     |
-//+------------------------------------------------------------------+
 void WriteStatus()
 {
    int handle = INVALID_HANDLE;
    int maxRetries = 50;
    
+   // Get account info
+   double equity = AccountInfoDouble(ACCOUNT_EQUITY);
+   int current_positions = CountOpenPositions();
+   
+   // === JONATHAN BLOW SSD PERFORMANCE GUARD (State-Delta Writing) ===
+   static double last_equity = -1;
+   static int last_positions = -1;
+   static uint last_heartbeat = 0;
+   uint currentTime_ms = GetTickCount();
+   
+   // Only write to disk if something changed OR it has been 5000ms (Heartbeat pulse)
+   bool stateChanged = (MathAbs(equity - last_equity) > 0.01) || (current_positions != last_positions);
+   bool heartbeatTime = (currentTime_ms - last_heartbeat > 5000);
+   
+   if(!stateChanged && !heartbeatTime && last_equity != -1)
+   {
+      return; // Skip I/O completely - preserve SSD life and lower thread latency
+   }
+   
+   // Update the internal cache
+   last_equity = equity;
+   last_positions = current_positions;
+   last_heartbeat = currentTime_ms;
+   // =================================================================
+
    for(int i = 0; i < maxRetries; i++)
    {
       handle = FileOpen(StatusFile, FILE_WRITE|FILE_TXT|FILE_COMMON);
@@ -408,10 +423,7 @@ void WriteStatus()
    // Get market info
    double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
    double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
-   
-   // Get account info
    double balance = AccountInfoDouble(ACCOUNT_BALANCE);
-   double equity = AccountInfoDouble(ACCOUNT_EQUITY);
    double margin = AccountInfoDouble(ACCOUNT_MARGIN);
    double free_margin = AccountInfoDouble(ACCOUNT_MARGIN_FREE);
    
@@ -429,14 +441,13 @@ void WriteStatus()
    json += "\"trading_enabled\":" + (EnableTrading ? "true" : "false") + ",";
    json += "\"daily_pnl\":" + DoubleToString(GetDailyPnL(), 2) + ",";
    json += "\"daily_trades\":" + IntegerToString(dailyTradeCount) + ",";
-   json += "\"open_positions\":" + IntegerToString(CountOpenPositions()) + ",";
+   json += "\"open_positions\":" + IntegerToString(current_positions) + ",";
    json += "\"total_exposure\":" + DoubleToString(GetTotalExposure(), 2) + ",";
    json += "\"server_time\":\"" + TimeToString(TimeCurrent(), TIME_DATE|TIME_SECONDS) + "\",";
    
    // === NEW: Multi-Symbol Support ===
-   // Broadcast prices for ALL symbols in Market Watch
    json += "\"quotes\":{";
-   int total = SymbolsTotal(true); // true = selected in Market Watch
+   int total = SymbolsTotal(true);
    int added = 0;
    
    for(int i=0; i<total; i++)
@@ -460,7 +471,6 @@ void WriteStatus()
       }
    }
    json += "}";
-   // ================================
    
    json += "}";
    
@@ -485,6 +495,7 @@ void ProcessCommands()
    FileClose(handle);
    
    if(commandJson == lastCommandContent || StringLen(commandJson) < 5) return;
+   
    lastCommandContent = commandJson;
    
    string command = ExtractJsonValue(commandJson, "command");
@@ -597,7 +608,6 @@ void HandleGetHistory(string json)
       ulong ticket = HistoryDealGetTicket(i);
       if(ticket > 0)
       {
-         // We only care about OUT deals (closing positions) from our EA
          long entryType = HistoryDealGetInteger(ticket, DEAL_ENTRY);
          long magic = HistoryDealGetInteger(ticket, DEAL_MAGIC);
          
@@ -636,7 +646,6 @@ void HandlePlaceOrder(string json)
    
    if(symbol == "") symbol = _Symbol;
    
-   // === SAFETY CHECK 1: Is trading allowed? ===
    if(!IsTradingAllowed())
    {
       WriteResponse("{\"status\":\"ERROR\",\"message\":\"Trading not allowed - check limits\"}");
@@ -644,17 +653,14 @@ void HandlePlaceOrder(string json)
       return;
    }
    
-   // === SAFETY CHECK 2: Validate symbol ===
    if(!SymbolSelect(symbol, true))
    {
       WriteResponse("{\"status\":\"ERROR\",\"message\":\"Symbol not available\"}");
       return;
    }
    
-   // === SAFETY CHECK 3: Normalize volume ===
    volume = NormalizeVolume(symbol, volume);
    
-   // === SAFETY CHECK 4: Validate order size and exposure ===
    if(!ValidateOrder(symbol, volume))
    {
       WriteResponse("{\"status\":\"ERROR\",\"message\":\"Order validation failed - check size limits\"}");
@@ -662,7 +668,6 @@ void HandlePlaceOrder(string json)
       return;
    }
    
-   // === SAFETY CHECK 5: Get fresh prices ===
    MqlTick tick;
    if(!SymbolInfoTick(symbol, tick))
    {
@@ -693,10 +698,7 @@ void HandlePlaceOrder(string json)
    
    if(SendOrderWithRetry(request, result))
    {
-      // Increment daily trade counter
       dailyTradeCount++;
-      
-      // Check slippage
       double slippage = MathAbs(result.price - requestedPrice);
       double slippagePips = slippage / SymbolInfoDouble(symbol, SYMBOL_POINT) / 10.0;
       
@@ -738,7 +740,6 @@ void HandleClosePosition(string json)
       return;
    }
    
-   // Get profit BEFORE closing
    double currentProfit = PositionGetDouble(POSITION_PROFIT);
    string symbol = PositionGetString(POSITION_SYMBOL);
    double volume = PositionGetDouble(POSITION_VOLUME);
@@ -783,7 +784,6 @@ void HandleModifyOrder(string json)
    
    string symbol = PositionGetString(POSITION_SYMBOL);
    
-   // Use current SL/TP if not provided in command (0 = don't change)
    if(new_sl == 0) new_sl = PositionGetDouble(POSITION_SL);
    if(new_tp == 0) new_tp = PositionGetDouble(POSITION_TP);
    
@@ -792,7 +792,7 @@ void HandleModifyOrder(string json)
    ZeroMemory(request);
    ZeroMemory(result);
    
-   request.action   = TRADE_ACTION_SLTP;  // Modify SL/TP only — no new order
+   request.action   = TRADE_ACTION_SLTP;
    request.position = ticket;
    request.symbol   = symbol;
    request.sl       = new_sl;
@@ -813,9 +813,6 @@ void HandleModifyOrder(string json)
       Print("MODIFY_ORDER FAILED ticket=", ticket, " code=", result.retcode, " ", result.comment);
    }
 }
-
-//| Helper Functions                                                 |
-//+------------------------------------------------------------------+
 
 double NormalizeVolume(string symbol, double volume)
 {
@@ -846,12 +843,10 @@ ENUM_ORDER_TYPE_FILLING GetFillingMode(string symbol)
 
 bool SendOrderWithRetry(MqlTradeRequest& request, MqlTradeResult& result)
 {
-   // Attempt with initial filling mode
    if(OrderSend(request, result)) return true;
    
    if(result.retcode != 10030) return false;
    
-   // Retry with different filling modes
    ENUM_ORDER_TYPE_FILLING modes[3];
    modes[0] = ORDER_FILLING_IOC;
    modes[1] = ORDER_FILLING_FOK;
@@ -888,7 +883,6 @@ string ExtractJsonValue(string json, string key)
    
    start += StringLen(search);
    
-   // Skip spaces
    while(start < StringLen(json))
    {
       ushort charCode = StringGetCharacter(json, start);
@@ -900,15 +894,13 @@ string ExtractJsonValue(string json, string key)
    ushort firstChar = StringGetCharacter(json, start);
    if (firstChar == '"') {
       isString = true;
-      start++; // skip the opening quote
+      start++;
    }
    
    int end = -1;
    if (isString) {
-      // Find the closing quote, careful of escaped strings if complex
       end = StringFind(json, "\"", start);
    } else {
-      // It's a number/boolean. Find nearest comma or closing brace
       int endComma = StringFind(json, ",", start);
       int endBrace = StringFind(json, "}", start);
       
@@ -926,8 +918,8 @@ void LogTrade(string action, string symbol, double volume, double price, string 
    if(!LogAllTrades) return;
    
    string logMsg = StringFormat("[%s] %s | %s | %.2f lots | Price: %.5f | %s", 
-                                TimeToString(TimeCurrent(), TIME_DATE|TIME_SECONDS),
-                                action, symbol, volume, price, result);
+                                 TimeToString(TimeCurrent(), TIME_DATE|TIME_SECONDS),
+                                 action, symbol, volume, price, result);
    Print(logMsg);
 }
 
