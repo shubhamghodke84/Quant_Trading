@@ -9,7 +9,7 @@
 environment: live
 
 account:
-  initial_balance: 1000.0
+  initial_balance: 5000.0
   currency: USD
   leverage: 100  # Default (FX). Symbol-specific leverage handled below.
 
@@ -72,8 +72,8 @@ symbols:
 
 risk:
   # $5,000 Account Risk Parameters
-  max_drawdown_pct: 0.07          # 7% Max Overall/Trailing Drawdown ($70)
-  max_daily_loss_pct: 0.025       # 2.5% Max Daily Loss ($125)
+  max_drawdown_pct: 0.07          # 7% Max Overall/Trailing Drawdown ($300)
+  max_daily_loss_pct: 0.025       # 2.5% Max Daily Loss ($150)
   bypass_drawdown_limit: true     # Bypass the drawdown killswitch permanently
 
   # $15 risk per trade = 0.30% of $5,000
@@ -81,8 +81,8 @@ risk:
   risk_per_trade_pct: 0.003       # 0.30% = $15 per trade
 
   # ABSOLUTE DOLLAR LOSS/PROFIT LIMITS
-  absolute_max_loss_usd: 125      # Daily loss limit ($5k × 2.5%)
-  max_drawdown_usd: 70            # Overall drawdown limit ($70)
+  absolute_max_loss_usd: 145      # Daily loss limit ($5k × 3.0%)
+  max_drawdown_usd: 295            # Overall drawdown limit ($300)
   max_daily_profit_usd: 260       # Stop trading for the day once $260 profit hit (~7 winning trades)
 
   max_positions: 2
