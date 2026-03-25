@@ -361,7 +361,8 @@ class RiskEngine:
         stop_loss: Decimal,
         side: OrderSide,
         current_positions: Optional[Dict[str, Position]] = None,
-        account_equity: Optional[Decimal] = None
+        account_equity: Optional[Decimal] = None,
+        signal_strength: float = None,
     ) -> Decimal:
         """
         Calculate optimal position size.
@@ -393,7 +394,8 @@ class RiskEngine:
             account_balance=account_balance,
             entry_price=entry_price,
             stop_loss=stop_loss,
-            risk_pct=self.risk_per_trade_pct
+            risk_pct=self.risk_per_trade_pct,
+            signal_strength=signal_strength,
         )
 
         # 2. Apply exposure limit if context provided
