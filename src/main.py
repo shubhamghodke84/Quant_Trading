@@ -436,10 +436,10 @@ class TradingSystem:
             self._loss_pause_until = None
             self.logger.info("[SessionManager] New trading day — counters reset")
 
-            # ── Run nightly regime classifier in background ───────────────────
+            # -- Run nightly regime classifier in background ---------------
             self._run_nightly_classifier()
 
-            # ── Reset RiskEngine daily metrics ────────────────────────────────
+            # -- Reset RiskEngine daily metrics --------------------------------
             # This refreshes: daily_trades_count, daily_start_equity,
             # and gives the equity HWM a chance to update to today's starting equity.
             try:
@@ -452,8 +452,11 @@ class TradingSystem:
             except Exception as _e:
                 self.logger.warning(f"[RiskEngine] Daily reset failed (non-critical): {_e}")
 
-        # ── Daily profit target gate ──────────────────────────────
-        daily_pnl = float(self.portfolio_engine.daily_realized_pnl + self.portfolio_engine.get_total_unrealized_pnl())
+        # -- Intra-day regime shift check (self-throttled to every 4h) ------
+        self._check_intraday_regime_shift()
+
+        # ── Daily profit target gate (realized only — unrealized is volatile) ──
+        daily_pnl = float(self.portfolio_engine.daily_realized_pnl)
         if self._max_daily_profit > 0 and daily_pnl >= self._max_daily_profit:
             if self.loop_iteration % 60 == 1:
                 self.logger.info(
@@ -716,6 +719,102 @@ class TradingSystem:
         t = threading.Thread(target=_run, daemon=True, name="RegimeClassifier")
         t.start()
 
+    def _check_intraday_regime_shift(self) -> None:
+        """Lightweight intra-day regime check every 4 hours.
+
+        Uses the rule-based classifier on live candle data to detect
+        regime shifts. If the new regime differs from the current
+        override with high confidence, triggers a strategy refresh.
+        """
+        import json as _json
+        from datetime import timezone as _tz
+
+        now = datetime.now(_tz.utc)
+
+        # Only check every 4 hours
+        if not hasattr(self, "_last_intraday_regime_check"):
+            self._last_intraday_regime_check = now
+            return
+
+        hours_since = (now - self._last_intraday_regime_check).total_seconds() / 3600
+        if hours_since < 4.0:
+            return
+
+        self._last_intraday_regime_check = now
+
+        try:
+            # Get current regime from override
+            override_path = PROJECT_ROOT / "data" / "config_override.json"
+            if not override_path.exists():
+                return
+
+            with open(override_path) as f:
+                current = _json.load(f)
+            current_regime = current.get("regime", "RANGE")
+
+            # Build live features from candle store
+            store = self.data_engine.candle_stores.get("XAUUSD", {}).get("5m")
+            if not store or len(store) < 50:
+                return
+
+            # Use the rule-based classifier on live features
+            sys.path.insert(0, str(PROJECT_ROOT))
+            from scripts.regime_classifier import (
+                compute_daily_bars, compute_features,
+                classify_rule_based, resolve_strategy_overrides,
+                FEATURE_COLS,
+            )
+            from scripts.strategy_scorer import compute_strategy_scores
+
+            df_5m = store.to_dataframe() if hasattr(store, "to_dataframe") else store
+            if len(df_5m) < 50:
+                return
+
+            daily = compute_daily_bars(df_5m)
+            if len(daily) < 5:
+                return
+
+            feat_df = compute_features(daily)
+            valid = feat_df[FEATURE_COLS].dropna().index
+            if len(valid) == 0:
+                return
+
+            last_feat = feat_df.loc[valid].iloc[-1][FEATURE_COLS].to_dict()
+            new_regime, new_confidence = classify_rule_based(last_feat)
+
+            # Only override if regime changed and confidence is high
+            if new_regime != current_regime and new_confidence >= 0.70:
+                self.logger.info(
+                    f"[RegimeML] Intra-day regime shift detected: "
+                    f"{current_regime} -> {new_regime} (confidence={new_confidence:.0%})"
+                )
+
+                perf_scores = compute_strategy_scores(lookback_days=30)
+                overrides = resolve_strategy_overrides(
+                    new_regime, new_confidence, perf_scores,
+                )
+
+                # Update the override file
+                current["regime"] = new_regime
+                current["confidence"] = round(new_confidence, 4)
+                current["classifier"] = "intraday-rule-based"
+                current["strategy_overrides"] = overrides
+                current["generated_at"] = now.isoformat()
+
+                with open(override_path, "w") as f:
+                    _json.dump(current, f, indent=2)
+
+                # Re-apply
+                self._apply_regime_override()
+            else:
+                self.logger.debug(
+                    f"[RegimeML] Intra-day check: regime={new_regime} "
+                    f"(same={new_regime == current_regime}, conf={new_confidence:.0%})"
+                )
+
+        except Exception as e:
+            self.logger.debug(f"[RegimeML] Intra-day check skipped: {e}")
+
 
     def _get_effective_account_info(self) -> Dict[str, Decimal]:
         """
@@ -865,18 +964,39 @@ class TradingSystem:
                 comment = str(deal.get('comment', ''))
 
                 # Extract strategy name from comment format "strategy|orderId"
-                strategy = 'unknown'
+                # Falls back to 'manual' (not 'unknown') so analytics are separated correctly.
+                strategy = 'manual'
                 if '|' in comment:
-                    strategy = comment.split('|')[0]
+                    strategy = comment.split('|')[0] or 'manual'
+                elif comment.startswith('Order-'):
+                    strategy = 'unknown'  # bot order, strategy name missing
+
+                # Derive original position direction from MT5 deal fields:
+                # MT5 deal type: 0=BUY deal, 1=SELL deal
+                # MT5 deal entry: 0=IN (open), 1=OUT (close), 2=INOUT, 3=OUT_BY
+                # A closing deal (entry=OUT) type 1 (SELL) means the position that was
+                # closed was LONG; type 0 (BUY close) means the position was SHORT.
+                deal_type = deal.get('type', deal.get('deal_type', -1))
+                deal_entry = deal.get('entry', deal.get('entry_type', -1))
+                if deal_entry in (1, '1', 'OUT'):
+                    # This is a closing deal — infer original position side
+                    if deal_type in (1, '1'):    # SELL close → was LONG
+                        deal_side = 'LONG'
+                    elif deal_type in (0, '0'):  # BUY close → was SHORT
+                        deal_side = 'SHORT'
+                    else:
+                        deal_side = 'UNKNOWN'
+                else:
+                    deal_side = 'UNKNOWN'  # opening deal or no entry field
 
                 # Record in TradeJournal if available
                 if self.trade_journal is not None:
                     try:
                         from decimal import Decimal as _Dec
-                        self.trade_journal.record_trade(
+                        self.trade_journal.record_raw_trade(
                             strategy=strategy,
                             symbol=symbol_name,
-                            side='UNKNOWN',           # deal history has no side
+                            side=deal_side,           # derived from deal type+entry fields
                             entry_price=_Dec(str(deal.get('price_open', 0))),
                             exit_price=_Dec(str(deal.get('price', deal.get('price_close', 0)))),
                             quantity=_Dec(str(deal.get('volume', 0))),
@@ -903,11 +1023,11 @@ class TradingSystem:
             self.logger.debug(f"[FillPoller] Error polling fills (non-critical): {e}")
     
     def _update_portfolio_prices(self) -> None:
-        """Update all portfolio positions with latest prices."""
+        """Update all portfolio positions with latest prices — one connector call per unique symbol."""
         try:
             ticks = {}
             for position in self.portfolio_engine.get_all_positions():
-                if position.symbol:
+                if position.symbol and position.symbol.ticker not in ticks:
                     tick = self.connector.get_current_tick(position.symbol.ticker)
                     if tick:
                         ticks[position.symbol.ticker] = tick
@@ -1024,11 +1144,13 @@ class TradingSystem:
                             self._last_close_time['SELL'] = now_utc
 
                         # Session manager counters
-                        # §3.4 fix: pnl >= 0 (breakeven trade isn't a loss)
-                        if pnl >= 0:
-                            self._consecutive_losses_today = 0  # reset on win or breakeven
+                        # Breakeven (pnl==0) does NOT reset consecutive-loss counter —
+                        # only a genuine profit does. This prevents gaming the circuit breaker
+                        # with flat trades.
+                        if pnl > 0:
+                            self._consecutive_losses_today = 0  # reset only on actual win
                             current_daily_pnl = float(self.portfolio_engine.daily_realized_pnl)
-                            outcome = 'WIN' if pnl > 0 else 'BREAKEVEN'
+                            outcome = 'WIN'
                             self.logger.info(
                                 f"[SessionManager] {outcome} recorded — "
                                 f"pnl=${pnl:.2f} | daily total=${current_daily_pnl:.2f}/${self._max_daily_profit:.2f}"
@@ -1038,6 +1160,11 @@ class TradingSystem:
                                     f"[SessionManager] 🎯 DAILY TARGET HIT — "
                                     f"no more signals today."
                                 )
+                        elif pnl == 0:
+                            self.logger.info(
+                                f"[SessionManager] BREAKEVEN recorded — "
+                                f"consecutive losses unchanged={self._consecutive_losses_today} pnl=${pnl:.2f}"
+                            )
                         else:
                             self._consecutive_losses_today += 1
                             self.logger.info(
@@ -1299,9 +1426,10 @@ def main():
         print("  3) $5,000")
         print("  4) $10,000")
         print("  5) $25,000")
+        print("  6) $50,000")
         print("=" * 60)
         try:
-            choice = input("  Enter choice (1-5) [Default: 3]: ").strip()
+            choice = input("  Enter choice (1-6) [Default: 3]: ").strip()
         except (KeyboardInterrupt, EOFError):
             print("\n  Aborted.")
             return
@@ -1311,7 +1439,8 @@ def main():
             "2": "config/config_live_1000.yaml",
             "3": "config/config_live_5000.yaml",
             "4": "config/config_live_10000.yaml",
-            "5": "config/config_live_25000.yaml"
+            "5": "config/config_live_25000.yaml",
+            "6": "config/config_live_50000.yaml"
         }
         config_file = choice_map.get(choice, "config/config_live_5000.yaml")
         
