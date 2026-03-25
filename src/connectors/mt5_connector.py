@@ -467,15 +467,19 @@ class MT5Connector:
             side = PositionSide.SHORT
         
         # Extract strategy from comment (format: "strategy|orderId" or "Order-id")
+        # Positions without the bot comment format are tagged 'manual' (not 'unknown')
+        # so analytics can separate human trades from bot trades.
         comment = mt5_pos.get('comment', '')
-        strategy = 'unknown'
+        strategy = 'manual'   # default: assume manual unless we see the bot format
         order_id_prefix = ''
         if '|' in comment:
             parts = comment.split('|', 1)
-            strategy = parts[0]
+            strategy = parts[0] or 'manual'
             order_id_prefix = parts[1] if len(parts) > 1 else ''
         elif comment.startswith('Order-'):
+            # Legacy bot format without strategy prefix
             order_id_prefix = comment.replace('Order-', '')
+            strategy = 'unknown'  # bot order but strategy name missing
         
         position = Position(
             symbol=symbol,
@@ -516,10 +520,9 @@ class MT5Connector:
                 lot_step=Decimal(str(sym_cfg.get('lot_step', '0.01'))),
                 value_per_lot=Decimal(str(sym_cfg.get('value_per_lot', '1.0'))),
                 commission_per_lot=Decimal(str(sym_cfg.get('commission_per_lot', '0.0'))),
-                max_spread=Decimal(str(sym_cfg.get('max_spread', '999.0')))
+                max_spread=Decimal(str(sym_cfg.get('max_spread', '999.0'))),
+                min_stops_distance=Decimal(str(sym_cfg.get('min_stops_distance', '1.0'))),
             )
-            # Dynamically attach stops distance to help Carmack rule
-            setattr(self.symbols_cache[ticker], 'min_stops_distance', Decimal(str(sym_cfg.get('min_stops_distance', '1.0'))))
         return self.symbols_cache[ticker]
     
     def is_market_open(self, symbol: str, max_age_seconds: int = 120) -> bool:
