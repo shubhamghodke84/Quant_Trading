@@ -387,45 +387,57 @@ class PortfolioEngine:
                         )
             
             # 2. Check for "Unknown Positions" (MT5 has it, we don't)
-            # Adopt them into our portfolio (resilience against restart/missed fills)
+            # Build O(1) lookup dicts to replace the O(n²) inner loop
+            our_by_ticket: Dict[str, object] = {}
+            our_by_fuzzy: Dict[tuple, object] = {}
+            for our_pos in our_positions.values():
+                t = str(our_pos.metadata.get('mt5_ticket', '')) if our_pos.metadata else ''
+                if t:
+                    our_by_ticket[t] = our_pos
+                fuzzy_key = (our_pos.symbol.ticker, our_pos.side) if our_pos.symbol else None
+                if fuzzy_key and fuzzy_key not in our_by_fuzzy:
+                    our_by_fuzzy[fuzzy_key] = our_pos
+
             unknown_positions = []
-            
+
             for pid, mt5_pos in mt5_positions.items():
-                # Check if this position already exists in our portfolio (by ticket or fuzzy match)
-                exists = False
-                mt5_ticket = mt5_pos.metadata.get('mt5_ticket')
-                
-                for our_pos in our_positions.values():
-                    # Match by Ticket (Primary)
-                    if mt5_ticket and str(our_pos.metadata.get('mt5_ticket')) == str(mt5_ticket):
-                        exists = True
-                        break
-                    
-                    # Match by Fuzzy Logic (Secondary - for untracked manual trades)
-                    # Same symbol, side, active status, and similar entry price
-                    if (our_pos.symbol.ticker == mt5_pos.symbol.ticker and
-                        our_pos.side == mt5_pos.side and
-                        abs(our_pos.entry_price - mt5_pos.entry_price) < (mt5_pos.current_price * Decimal("0.001"))): # 0.1% tolerance
-                        exists = True
-                        # Update metadata with ticket if missing
-                        if not our_pos.metadata.get('mt5_ticket') and mt5_ticket:
-                            our_pos.metadata['mt5_ticket'] = mt5_ticket
-                            self.logger.info(f"Linked existing position {our_pos.position_id} to MT5 ticket {mt5_ticket}")
-                        break
-                
-                if not exists:
-                    unknown_positions.append((pid, mt5_pos))
+                mt5_ticket = str(mt5_pos.metadata.get('mt5_ticket', '')) if mt5_pos.metadata else ''
+
+                # Primary: O(1) ticket match
+                if mt5_ticket and mt5_ticket in our_by_ticket:
+                    continue
+
+                # Secondary: O(1) fuzzy match by (symbol, side) then price tolerance
+                fuzzy_key = (mt5_pos.symbol.ticker, mt5_pos.side) if mt5_pos.symbol else None
+                our_pos = our_by_fuzzy.get(fuzzy_key) if fuzzy_key else None
+                if our_pos and abs(our_pos.entry_price - mt5_pos.entry_price) < (mt5_pos.current_price * Decimal("0.001")):
+                    if mt5_ticket and not our_pos.metadata.get('mt5_ticket'):
+                        our_pos.metadata['mt5_ticket'] = mt5_ticket
+                        self.logger.info(f"Linked existing position {our_pos.position_id} to MT5 ticket {mt5_ticket}")
+                    continue
+
+                unknown_positions.append((pid, mt5_pos))
             
             if unknown_positions:
                 self.logger.info(f"Found {len(unknown_positions)} unknown positions in MT5 - adopting them")
-                
+
                 for pid, mt5_pos in unknown_positions:
+                    # Mark positions adopted from MT5 that we didn't open ourselves.
+                    # _convert_mt5_position already tags them 'manual' when the comment
+                    # doesn't have the bot's "strategy|orderId" format.
+                    if mt5_pos.metadata.get('strategy') not in ('manual', 'unknown'):
+                        pass  # bot position recovered after restart — keep strategy tag
+                    elif not mt5_pos.metadata.get('mt5_comment', ''):
+                        mt5_pos.metadata['strategy'] = 'manual'  # no comment = manual
+
                     self.add_position(mt5_pos)
                     self.logger.info(
                         "Adopted position from MT5",
                         position_id=pid,
                         symbol=mt5_pos.symbol.ticker,
-                        volume=float(mt5_pos.quantity)
+                        volume=float(mt5_pos.quantity),
+                        strategy=mt5_pos.metadata.get('strategy', 'manual'),
+                        side=mt5_pos.side.value,
                     )
             
         else:
@@ -445,25 +457,41 @@ class PortfolioEngine:
     
     def get_statistics(self) -> Dict:
         """
-        Get portfolio statistics.
-        
+        Get portfolio statistics — single pass over positions, O(n).
+
         Returns:
             Dict with portfolio metrics
         """
         positions = self.get_all_positions()
-        
-        long_positions = [p for p in positions if p.side == PositionSide.LONG]
-        short_positions = [p for p in positions if p.side == PositionSide.SHORT]
-        
+
+        long_count = short_count = 0
+        total_exposure = net_exposure = unrealized_pnl = Decimal("0")
+
+        for p in positions:
+            if p.side == PositionSide.LONG:
+                long_count += 1
+            elif p.side == PositionSide.SHORT:
+                short_count += 1
+
+            if p.symbol:
+                exposure = abs(p.quantity * p.current_price * p.symbol.value_per_lot)
+                total_exposure += exposure
+                if p.side == PositionSide.LONG:
+                    net_exposure += exposure
+                elif p.side == PositionSide.SHORT:
+                    net_exposure -= exposure
+
+            unrealized_pnl += p.unrealized_pnl
+
         return {
             'total_positions': len(positions),
-            'long_positions': len(long_positions),
-            'short_positions': len(short_positions),
-            'total_exposure': float(self.get_total_exposure()),
-            'net_exposure': float(self.get_net_exposure()),
-            'unrealized_pnl': float(self.get_total_unrealized_pnl()),
+            'long_positions': long_count,
+            'short_positions': short_count,
+            'total_exposure': float(total_exposure),
+            'net_exposure': float(net_exposure),
+            'unrealized_pnl': float(unrealized_pnl),
             'realized_pnl': float(self.total_realized_pnl),
             'daily_realized_pnl': float(self.daily_realized_pnl),
-            'total_pnl': float(self.get_portfolio_pnl()),
+            'total_pnl': float(self.total_realized_pnl + unrealized_pnl),
             'last_reconciliation': self.last_reconciliation.isoformat() if self.last_reconciliation else None
         }
