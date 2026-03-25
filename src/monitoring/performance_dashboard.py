@@ -98,14 +98,56 @@ class PerformanceDashboard:
 
     # ── 1. Account Snapshot ─────────────────────────────────────────
 
+    def _compute_risk_metrics(self) -> dict:
+        """Compute Sharpe and Calmar from journal trade history."""
+        trades = self.journal.get_trades()
+        if not trades or len(trades) < 5:
+            return {"sharpe": None, "calmar": None, "max_dd_pct": None}
+
+        df = pd.DataFrame(trades)
+        df["realized_pnl"] = pd.to_numeric(df["realized_pnl"], errors="coerce").fillna(0)
+
+        total_pnl = df["realized_pnl"].sum()
+        n_trades = len(df)
+
+        # Approximate annualised return assuming ~252 trading days
+        # Use avg daily P&L × 252 / initial_capital
+        avg_daily_pnl = total_pnl / max(n_trades, 1)
+        ann_return_pct = (avg_daily_pnl * 252 / float(self.initial_capital) * 100) if self.initial_capital else 0
+
+        # Sharpe from per-trade returns (std of individual trade P&L)
+        pnl_std = df["realized_pnl"].std()
+        sharpe = (df["realized_pnl"].mean() / pnl_std * (n_trades ** 0.5)) if pnl_std > 0 else None
+
+        # Max drawdown from cumulative equity curve
+        cumulative = df["realized_pnl"].cumsum()
+        equity_curve = float(self.initial_capital) + cumulative
+        rolling_max = equity_curve.cummax()
+        drawdown = (equity_curve - rolling_max) / rolling_max * 100
+        max_dd_pct = float(drawdown.min())  # most negative value
+
+        calmar = (ann_return_pct / abs(max_dd_pct)) if max_dd_pct < 0 else None
+
+        return {
+            "sharpe": round(float(sharpe), 2) if sharpe is not None else None,
+            "calmar": round(float(calmar), 2) if calmar is not None else None,
+            "max_dd_pct": round(max_dd_pct, 2),
+            "ann_return_pct": round(ann_return_pct, 2),
+        }
+
     def _print_account_snapshot(self) -> None:
         acct = self._get_mt5_account()
         stats = self.portfolio.get_statistics()
+        risk = self._compute_risk_metrics()
 
         balance = acct["balance"]
         equity = acct["equity"]
         ret = equity - float(self.initial_capital)
         ret_pct = (ret / float(self.initial_capital) * 100) if self.initial_capital else 0
+
+        sharpe_str = f"{risk['sharpe']:.2f}" if risk["sharpe"] is not None else "n/a"
+        calmar_str = f"{risk['calmar']:.2f}" if risk["calmar"] is not None else "n/a"
+        mdd_str = f"{risk['max_dd_pct']:.2f}%" if risk["max_dd_pct"] is not None else "n/a"
 
         print()
         print("╔══════════════════════════════════════════════════╗")
@@ -120,8 +162,11 @@ class PerformanceDashboard:
         print(f"  ├─ Return       ${ret:>+10,.2f}  ({ret_pct:+.2f}%)")
         print(f"  ├─ Margin       ${acct['margin']:>10,.2f}")
         print(f"  ├─ Free Margin  ${acct['free_margin']:>10,.2f}")
-        print(f"  └─ Positions    {stats['total_positions']}  "
+        print(f"  ├─ Positions    {stats['total_positions']}  "
               f"(L:{stats['long_positions']}  S:{stats['short_positions']})")
+        print(f"  ├─ Sharpe       {sharpe_str:>10}")
+        print(f"  ├─ Calmar       {calmar_str:>10}  (ann_ret / max_dd)")
+        print(f"  └─ Max DD       {mdd_str:>10}")
 
     # ── 2. Trade Log ────────────────────────────────────────────────
 
@@ -173,13 +218,19 @@ class PerformanceDashboard:
         df = pd.DataFrame(trades)
         total = len(df)
 
+        # Normalise side column so LONG/SHORT comparisons are case-insensitive
+        if "side" in df.columns:
+            df["side"] = df["side"].str.upper().fillna("UNKNOWN")
+        else:
+            df["side"] = "UNKNOWN"
+
         print()
         print("  STRATEGY SCORECARD")
-        print("  " + "─" * 76)
+        print("  " + "─" * 90)
         print(f"  {'Strategy':<16} {'Trades':>7} {'Usage%':>7} "
-              f"{'Wins':>5} {'Win%':>6} {'Loss%':>6} "
+              f"{'L/S':>6} {'Wins':>5} {'Win%':>6} {'Loss%':>6} "
               f"{'Net P&L':>10} {'Avg P&L':>9}")
-        print("  " + "─" * 76)
+        print("  " + "─" * 90)
 
         grouped = df.groupby("strategy")
         rows = []
@@ -192,18 +243,21 @@ class PerformanceDashboard:
             win_pct = wins / cnt * 100 if cnt else 0
             loss_pct = losses / cnt * 100 if cnt else 0
             usage_pct = cnt / total * 100
+            long_cnt = (grp["side"] == "LONG").sum()
+            short_cnt = (grp["side"] == "SHORT").sum()
+            ls_label = f"{long_cnt}L/{short_cnt}S"
 
-            rows.append((strat, cnt, usage_pct, wins, win_pct, loss_pct, net, avg))
+            rows.append((strat, cnt, usage_pct, ls_label, wins, win_pct, loss_pct, net, avg))
 
         # Sort by net P&L descending
-        rows.sort(key=lambda r: r[6], reverse=True)
+        rows.sort(key=lambda r: r[7], reverse=True)
 
-        for strat, cnt, usage, wins, wpct, lpct, net, avg in rows:
+        for strat, cnt, usage, ls_label, wins, wpct, lpct, net, avg in rows:
             color = "\033[92m" if net >= 0 else "\033[91m"
             reset = "\033[0m"
 
             print(f"  {str(strat)[:15]:<16} {cnt:>7} {usage:>6.1f}% "
-                  f"{wins:>5} {wpct:>5.1f}% {lpct:>5.1f}% "
+                  f"{ls_label:>6} {wins:>5} {wpct:>5.1f}% {lpct:>5.1f}% "
                   f"{color}${net:>+9.2f}{reset} "
                   f"{color}${avg:>+8.2f}{reset}")
 
@@ -212,10 +266,13 @@ class PerformanceDashboard:
         total_wins = (df["realized_pnl"] > 0).sum()
         total_win_pct = total_wins / total * 100 if total else 0
         total_loss_pct = 100 - total_win_pct
+        total_long = (df["side"] == "LONG").sum()
+        total_short = (df["side"] == "SHORT").sum()
 
-        print("  " + "─" * 76)
+        print("  " + "─" * 90)
         tc = "\033[92m" if total_pnl >= 0 else "\033[91m"
         print(f"  {'TOTAL':<16} {total:>7} {'100.0':>6}% "
+              f"{total_long}L/{total_short}S "
               f"{total_wins:>5} {total_win_pct:>5.1f}% {total_loss_pct:>5.1f}% "
               f"{tc}${total_pnl:>+9.2f}\033[0m")
         print()
@@ -232,6 +289,10 @@ class PerformanceDashboard:
         strategy_stats = {}
         if len(df):
             total = len(df)
+            if "side" in df.columns:
+                df["side"] = df["side"].str.upper().fillna("UNKNOWN")
+            else:
+                df["side"] = "UNKNOWN"
             for strat, grp in df.groupby("strategy"):
                 cnt = len(grp)
                 wins = int((grp["realized_pnl"] > 0).sum())
@@ -242,11 +303,14 @@ class PerformanceDashboard:
                     "loss_pct": round((cnt - wins) / cnt * 100, 1) if cnt else 0,
                     "net_pnl": round(float(grp["realized_pnl"].sum()), 2),
                     "avg_pnl": round(float(grp["realized_pnl"].mean()), 2),
+                    "long_trades": int((grp["side"] == "LONG").sum()),
+                    "short_trades": int((grp["side"] == "SHORT").sum()),
                 }
 
         equity = acct["equity"]
         ret_pct = (equity - float(self.initial_capital)) / float(self.initial_capital) * 100 if self.initial_capital else 0
 
+        risk = self._compute_risk_metrics()
         return {
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "initial_capital": float(self.initial_capital),
@@ -259,5 +323,8 @@ class PerformanceDashboard:
             "unrealized_pnl": stats.get("unrealized_pnl", 0),
             "realized_pnl": stats.get("realized_pnl", 0),
             "total_trades": len(trades),
+            "sharpe_ratio": risk.get("sharpe"),
+            "calmar_ratio": risk.get("calmar"),
+            "max_drawdown_pct": risk.get("max_dd_pct"),
             "strategy_stats": strategy_stats,
         }
