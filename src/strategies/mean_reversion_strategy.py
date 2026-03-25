@@ -43,7 +43,7 @@ class MeanReversionStrategy(BaseStrategy):
         self.max_lookback = config.get('max_lookback', 100)
         self.lookback_multiplier = config.get('lookback_multiplier', 1.0) # Multiply half-life by this
         
-        self.entry_z_score = config.get('entry_z_score', 2.0) # Fallback if dynamic fails
+        self.entry_z_score = config.get('entry_z_score', 2.2)  # Raised from 2.0 for quality
         self.exit_z_score = config.get('exit_z_score', 0.0)
         
         self.use_dynamic_thresholds = config.get('use_dynamic_thresholds', True)
@@ -137,9 +137,41 @@ class MeanReversionStrategy(BaseStrategy):
         # Calculate ATR for wide, safe stops
         atr = Indicators.atr(bars, period=14)
         current_atr = float(atr.iloc[-1]) if not pd.isna(atr.iloc[-1]) else current_close * 0.002
-        
+
+        # RSI gate: require genuinely extreme RSI before mean-reversion entry
+        # Prevents catching falling knives in trending markets misclassified as RANGE
+        rsi = Indicators.rsi(bars, period=14)
+        current_rsi = float(rsi.iloc[-1]) if not pd.isna(rsi.iloc[-1]) else 50.0
+        prev_rsi = float(rsi.iloc[-2]) if not pd.isna(rsi.iloc[-2]) else current_rsi
+        prev2_rsi = float(rsi.iloc[-3]) if not pd.isna(rsi.iloc[-3]) else prev_rsi
+
+        # Bollinger Band confirmation: price must be at or beyond the outer band
+        # (z-score extremes without BB touch can be mean drift, not reversal setups)
+        bb_upper, _, bb_lower = Indicators.bollinger_bands(bars, period=20, num_std=2.0)
+        current_bb_lower = float(bb_lower.iloc[-1]) if not pd.isna(bb_lower.iloc[-1]) else current_close
+        current_bb_upper = float(bb_upper.iloc[-1]) if not pd.isna(bb_upper.iloc[-1]) else current_close
+
         # Buy Signal (Oversold)
         if current_z < entry_thresh_long:
+            if current_rsi > 40.0:
+                self._log_no_signal(
+                    f"MeanRev BUY: RSI not extreme enough ({current_rsi:.1f} > 40)")
+                return None
+
+            # Price must be at or below lower Bollinger Band — confirms genuine extremity
+            if current_close > current_bb_lower:
+                self._log_no_signal(
+                    f"MeanRev BUY: price {current_close:.2f} not at/below lower BB {current_bb_lower:.2f}")
+                return None
+
+            # RSI deceleration: RSI was falling but is now leveling off (exhaustion of selling)
+            # Require: prior bar had lower RSI than two bars ago, current bar shows slowdown
+            rsi_was_falling = prev_rsi < prev2_rsi
+            rsi_decelerating = current_rsi >= prev_rsi  # RSI stopped falling or turned up
+            if not (rsi_was_falling and rsi_decelerating):
+                self._log_no_signal(
+                    f"MeanRev BUY: RSI not decelerating (RSI: {prev2_rsi:.1f}→{prev_rsi:.1f}→{current_rsi:.1f})")
+                return None
             return self._create_signal(
                 side=OrderSide.BUY,
                 strength=min(abs(current_z) / 3, 1.0),
@@ -157,6 +189,24 @@ class MeanReversionStrategy(BaseStrategy):
             
         # Sell Signal (Overbought)
         elif current_z > entry_thresh_short:
+            if current_rsi < 60.0:
+                self._log_no_signal(
+                    f"MeanRev SELL: RSI not extreme enough ({current_rsi:.1f} < 60)")
+                return None
+
+            # Price must be at or above upper Bollinger Band
+            if current_close < current_bb_upper:
+                self._log_no_signal(
+                    f"MeanRev SELL: price {current_close:.2f} not at/above upper BB {current_bb_upper:.2f}")
+                return None
+
+            # RSI deceleration: RSI was rising but is now leveling off (exhaustion of buying)
+            rsi_was_rising = prev_rsi > prev2_rsi
+            rsi_decelerating = current_rsi <= prev_rsi  # RSI stopped rising or turned down
+            if not (rsi_was_rising and rsi_decelerating):
+                self._log_no_signal(
+                    f"MeanRev SELL: RSI not decelerating (RSI: {prev2_rsi:.1f}→{prev_rsi:.1f}→{current_rsi:.1f})")
+                return None
             return self._create_signal(
                 side=OrderSide.SELL,
                 strength=min(abs(current_z) / 3, 1.0),
