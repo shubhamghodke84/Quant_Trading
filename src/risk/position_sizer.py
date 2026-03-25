@@ -28,25 +28,42 @@ class PositionSizer:
         account_balance: Decimal,
         entry_price: Decimal,
         stop_loss: Decimal,
-        risk_pct: Decimal = None
+        risk_pct: Decimal = None,
+        signal_strength: float = None,
     ) -> Decimal:
         """
-        Calculate position size based on risk.
-        
+        Calculate position size based on risk, optionally scaled by signal strength.
+
         Uses fixed fractional position sizing:
-        position_size = (account_balance * risk_pct) / risk_per_unit
-        
+            position_size = (account_balance * effective_risk_pct) / risk_per_unit
+
+        Signal-strength scaling (when provided):
+            effective_risk = risk_pct × (0.7 + 0.6 × strength)
+            This gives:
+                strength=0.50 → 1.00× base risk  (minimum qualifying signal)
+                strength=0.75 → 1.15× base risk
+                strength=1.00 → 1.30× base risk  (high-conviction cap)
+            Scaling is capped at 1.3× to stay within prop-firm risk guardrails.
+
         Args:
             symbol: Trading symbol
             account_balance: Current account balance
             entry_price: Intended entry price
             stop_loss: Stop loss price
             risk_pct: Risk per trade as decimal (default from config)
-        
+            signal_strength: Optional [0, 1] signal strength from strategy
+
         Returns:
             Position size in lots, rounded to symbol lot step
         """
         risk_pct = risk_pct or self.default_risk_pct
+
+        # Scale risk% by signal strength when provided
+        if signal_strength is not None:
+            strength = max(0.0, min(1.0, float(signal_strength)))
+            scale = 0.7 + 0.6 * strength          # [0.70, 1.30]
+            scale = max(0.7, min(1.3, scale))      # clamp for safety
+            risk_pct = risk_pct * Decimal(str(round(scale, 4)))
         
         # Calculate risk per unit
         price_risk = abs(entry_price - stop_loss)
