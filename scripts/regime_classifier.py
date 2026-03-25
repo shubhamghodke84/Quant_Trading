@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """
-Nightly Regime Classifier — ML-powered market type prediction.
+Nightly Regime Classifier — ML-powered market type prediction
+with Markov transitions and RL-lite performance feedback.
 
 Runs at midnight, analyzes the last N days of XAUUSD data,
-trains a RandomForestClassifier, and writes config_override.json
-with strategy enable/disable recommendations for the next session.
+trains a RandomForestClassifier, smooths predictions with a
+Markov transition model, and writes config_override.json with
+confidence-weighted strategy recommendations.
 
 Usage:
     python scripts/regime_classifier.py [--bars-file data/historical/XAUUSD_5m_real.csv]
@@ -17,10 +19,11 @@ Regime Labels:
     RANGE    → sideways/choppy day, small net move
     VOLATILE → large ATR but no clear direction (news day)
 
-Strategy Rules (written to config_override.json):
-    TREND    → enable breakout + momentum + kalman_regime, disable mean_reversion + vwap
-    RANGE    → enable mean_reversion + vwap, disable breakout + momentum
-    VOLATILE → enable only kalman_regime (least exposed), disable all breakout/momentum
+Key improvements over v1:
+    - Dynamic strategy weights (0.0-1.0) instead of binary on/off
+    - Markov chain smooths day-to-day regime flip-flopping
+    - Trade-performance feedback adjusts weights from real P&L
+    - Low-confidence predictions enable more strategies (wider net)
 """
 
 import sys
@@ -38,18 +41,23 @@ warnings.filterwarnings("ignore")
 PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
+from scripts.strategy_scorer import compute_strategy_scores, compute_regime_strategy_scores, adjust_weights
+
 OVERRIDE_FILE = PROJECT_ROOT / "data" / "config_override.json"
 DEFAULT_BARS = PROJECT_ROOT / "data" / "historical" / "XAUUSD_5m_real.csv"
 LIVE_LOG_BARS = PROJECT_ROOT / "data" / "logs" / "candle_store_XAUUSD_5m.csv"
 
 
-# ─── Feature Engineering ──────────────────────────────────────────────────────
+# --- Feature Engineering ---------------------------------------------------
 
 def compute_daily_bars(df_5m: pd.DataFrame) -> pd.DataFrame:
-    """Aggregate 5m bars into daily OHLCV."""
-    df = df_5m.copy()
-    df["date"] = pd.to_datetime(df["timestamp"]).dt.date
-    daily = df.groupby("date").agg(
+    """Aggregate 5m bars into daily OHLCV.
+
+    Blow lens: avoid unnecessary .copy() — groupby doesn't mutate the source.
+    Carmack lens: make the date column derivation visible, not buried.
+    """
+    dates = pd.to_datetime(df_5m["timestamp"]).dt.date
+    daily = df_5m.assign(date=dates).groupby("date").agg(
         open=("open", "first"),
         high=("high", "max"),
         low=("low", "min"),
@@ -58,6 +66,20 @@ def compute_daily_bars(df_5m: pd.DataFrame) -> pd.DataFrame:
     ).reset_index()
     daily["date"] = pd.to_datetime(daily["date"])
     return daily.sort_values("date").reset_index(drop=True)
+
+
+def _compute_atr(high: pd.Series, low: pd.Series, close: pd.Series, span: int = 14) -> pd.Series:
+    """Compute Average True Range — shared by features and labels.
+
+    Knuth lens: single source of truth for a shared computation.
+    Blow lens: eliminate hidden O(n) duplicate between compute_features and compute_labels.
+    """
+    tr = pd.concat([
+        high - low,
+        (high - close.shift(1)).abs(),
+        (low - close.shift(1)).abs(),
+    ], axis=1).max(axis=1)
+    return tr.ewm(span=span, adjust=False).mean()
 
 
 def compute_features(daily: pd.DataFrame) -> pd.DataFrame:
@@ -78,23 +100,32 @@ def compute_features(daily: pd.DataFrame) -> pd.DataFrame:
     high = daily["high"]
     low = daily["low"]
 
-    # ATR (14)
+    # ATR (14) — single computation, reused by compute_labels via _compute_atr
+    atr = _compute_atr(high, low, close, span=14)
+
+    # ADX (14) — Wilder's smoothing: alpha = 1/period (not EWM span=14 which uses alpha=2/15)
+    # Using consistent alpha=1/14 for TR, +DM and -DM so DI ratios are correct.
+    _wilder_alpha = 1.0 / 14
     tr = pd.concat([
         high - low,
         (high - close.shift(1)).abs(),
         (low - close.shift(1)).abs(),
     ], axis=1).max(axis=1)
-    atr = tr.ewm(span=14, adjust=False).mean()
-
-    # ADX (14) — simplified (EWM of DI difference)
     up_move = high.diff()
     down_move = -low.diff()
-    plus_dm = np.where((up_move > down_move) & (up_move > 0), up_move, 0.0)
-    minus_dm = np.where((down_move > up_move) & (down_move > 0), down_move, 0.0)
-    plus_di = pd.Series(plus_dm).ewm(span=14, adjust=False).mean() / atr * 100
-    minus_di = pd.Series(minus_dm).ewm(span=14, adjust=False).mean() / atr * 100
+    plus_dm = pd.Series(
+        np.where((up_move > down_move) & (up_move > 0), up_move, 0.0)
+    )
+    minus_dm = pd.Series(
+        np.where((down_move > up_move) & (down_move > 0), down_move, 0.0)
+    )
+    smooth_tr = tr.ewm(alpha=_wilder_alpha, adjust=False).mean()
+    smooth_plus_dm = plus_dm.ewm(alpha=_wilder_alpha, adjust=False).mean()
+    smooth_minus_dm = minus_dm.ewm(alpha=_wilder_alpha, adjust=False).mean()
+    plus_di = (smooth_plus_dm / smooth_tr.replace(0, np.nan)) * 100
+    minus_di = (smooth_minus_dm / smooth_tr.replace(0, np.nan)) * 100
     dx = ((plus_di - minus_di).abs() / (plus_di + minus_di).replace(0, np.nan)) * 100
-    adx = dx.ewm(span=14, adjust=False).mean()
+    adx = dx.ewm(alpha=_wilder_alpha, adjust=False).mean()
 
     # EMA20
     ema20 = close.ewm(span=20, adjust=False).mean()
@@ -112,6 +143,16 @@ def compute_features(daily: pd.DataFrame) -> pd.DataFrame:
     # Volume ratio
     vol_ratio = daily["volume"] / daily["volume"].rolling(20).mean()
 
+    # Parkinson volatility estimator: σ² = (1/4ln2) × E[ln(H/L)²]
+    # Responds faster to intraday volatility shifts than EWM-ATR (no lag from close-to-close).
+    # Expressed as z-score for stationarity across different price levels.
+    log_hl = np.log((high / low.replace(0, np.nan)))
+    park_var = (log_hl ** 2) / (4.0 * np.log(2))
+    park_vol = park_var.rolling(5, min_periods=3).mean().pow(0.5)
+    park_mean = park_vol.rolling(20, min_periods=10).mean()
+    park_std = park_vol.rolling(20, min_periods=10).std()
+    park_zscore = (park_vol - park_mean) / park_std.replace(0, np.nan)
+
     feat = pd.DataFrame({
         "date": daily["date"],
         "adx_14": adx.values,
@@ -122,28 +163,27 @@ def compute_features(daily: pd.DataFrame) -> pd.DataFrame:
         "momentum_5d": momentum_5d.values,
         "range_atr_ratio": ((high - low) / atr).values,
         "vol_ratio": vol_ratio.values,
+        "park_vol_zscore": park_zscore.values,   # Parkinson vol z-score (fast vol regime signal)
     })
     return feat
 
 
 def compute_labels(daily: pd.DataFrame, feat: pd.DataFrame) -> pd.Series:
-    """
-    Auto-label each day based on NEXT DAY's price action.
+    """Auto-label each day based on NEXT DAY's price action.
+
+    Knuth lens: reuses _compute_atr() instead of duplicating the O(n) ATR
+    computation that compute_features() already performs.
 
     TREND    : |next_close - today_close| / today_ATR > 1.2
-    VOLATILE : today's range/ATR > 2.0 but net move < 0.8×ATR
+    VOLATILE : today's range/ATR > 2.0 but net move < 0.8*ATR
     RANGE    : everything else
     """
     close = daily["close"]
     high = daily["high"]
     low = daily["low"]
 
-    tr = pd.concat([
-        high - low,
-        (high - close.shift(1)).abs(),
-        (low - close.shift(1)).abs(),
-    ], axis=1).max(axis=1)
-    atr = tr.ewm(span=14, adjust=False).mean()
+    # Reuse shared ATR computation — was previously duplicated O(n)
+    atr = _compute_atr(high, low, close, span=14)
 
     next_move = close.shift(-1) - close
     move_atr_ratio = (next_move.abs() / atr)
@@ -155,40 +195,165 @@ def compute_labels(daily: pd.DataFrame, feat: pd.DataFrame) -> pd.Series:
     return labels
 
 
-# ─── Core Classifier ──────────────────────────────────────────────────────────
+# --- Core Classifier -------------------------------------------------------
 
-STRATEGY_MAP = {
+# Dynamic weights (0.0-1.0) replace the old binary STRATEGY_MAP.
+# Each value is a prior confidence that a strategy performs well in that regime.
+# Strategies with weight >= CONFIDENCE_THRESHOLD get enabled.
+STRATEGY_WEIGHTS = {
     "TREND": {
-        "breakout":      True,
-        "momentum":      True,
-        "kalman_regime": True,
-        "mean_reversion": False,
-        "vwap":          False,
-        "mini_medallion": True,
+        "breakout":       0.85,
+        "momentum":       0.80,
+        "kalman_regime":  0.70,
+        "mean_reversion": 0.10,  # stays low by default (prop challenge guard)
+        "vwap":           0.25,
+        "mini_medallion": 0.65,
     },
     "RANGE": {
-        "breakout":      False,
-        "momentum":      False,
-        "kalman_regime": True,   # still useful as regime watchdog
-        "mean_reversion": False,  # NOTE: disabled for prop challenge — kept as False
-        "vwap":          True,
-        "mini_medallion": True,
+        "breakout":       0.15,
+        "momentum":       0.20,
+        "kalman_regime":  0.60,
+        "mean_reversion": 0.15,  # low default, can be boosted by trade feedback
+        "vwap":           0.85,
+        "mini_medallion": 0.55,
     },
     "VOLATILE": {
-        "breakout":      False,
-        "momentum":      False,
-        "kalman_regime": True,
-        "mean_reversion": False,
-        "vwap":          False,
-        "mini_medallion": True,
+        "breakout":       0.20,
+        "momentum":       0.30,
+        "kalman_regime":  0.90,
+        "mean_reversion": 0.10,
+        "vwap":           0.40,
+        "mini_medallion": 0.70,
     },
 }
+
+# Strategies with weight below this threshold are disabled.
+# Low-confidence predictions lower this threshold to enable a wider strategy net.
+CONFIDENCE_THRESHOLD = 0.40
+
+# Torvalds lens: frozenset for O(1) membership tests in Markov loop.
+# List preserved as REGIME_ORDER for deterministic iteration.
+REGIME_ORDER = ("TREND", "RANGE", "VOLATILE")
+REGIMES = frozenset(REGIME_ORDER)
 
 FEATURE_COLS = [
     "adx_14", "atr_pct", "bb_width_ratio",
     "close_ema20_pct", "momentum_1d", "momentum_5d",
     "range_atr_ratio", "vol_ratio",
+    "park_vol_zscore",   # Parkinson vol z-score: fast regime-change signal
 ]
+
+
+# --- Markov Chain Transition Model -----------------------------------------
+
+def compute_transition_matrix(labels: pd.Series) -> dict:
+    """Compute a 3x3 Markov transition matrix from historical regime labels.
+
+    Returns a dict: {from_regime: {to_regime: probability}}.
+    Rows sum to 1.0. Uses Laplace smoothing to avoid zero probabilities.
+    """
+    counts = {r: {r2: 1 for r2 in REGIME_ORDER} for r in REGIME_ORDER}  # Laplace prior
+
+    clean = labels.dropna().values
+    for i in range(len(clean) - 1):
+        from_r = clean[i]
+        to_r = clean[i + 1]
+        if from_r in REGIMES and to_r in REGIMES:
+            counts[from_r][to_r] += 1
+
+    matrix = {}
+    for from_r in REGIME_ORDER:
+        total = sum(counts[from_r].values())
+        matrix[from_r] = {
+            to_r: round(counts[from_r][to_r] / total, 4) for to_r in REGIME_ORDER
+        }
+    return matrix
+
+
+def smooth_prediction_with_markov(
+    rf_proba: dict,
+    prev_regime: str,
+    transition_matrix: dict,
+    alpha: float = 0.7,
+) -> dict:
+    """Blend RandomForest probabilities with Markov prior.
+
+    P(regime) = alpha * RF_prob + (1-alpha) * Markov_transition_prob
+
+    Args:
+        rf_proba: {regime: probability} from RandomForest
+        prev_regime: yesterday's regime label
+        transition_matrix: from compute_transition_matrix()
+        alpha: weight for RF prediction (0.7 = trust RF mostly)
+
+    Returns:
+        {regime: smoothed_probability}
+    """
+    if prev_regime not in transition_matrix:
+        return rf_proba
+
+    markov_prior = transition_matrix[prev_regime]
+    smoothed = {}
+    for regime in REGIME_ORDER:
+        rf_p = rf_proba.get(regime, 0.0)
+        mk_p = markov_prior.get(regime, 1.0 / len(REGIME_ORDER))
+        smoothed[regime] = alpha * rf_p + (1 - alpha) * mk_p
+
+    # Renormalize to sum to 1.0
+    total = sum(smoothed.values())
+    if total > 0:
+        smoothed = {k: v / total for k, v in smoothed.items()}
+
+    return smoothed
+
+
+def resolve_strategy_overrides(
+    regime: str,
+    confidence: float,
+    performance_scores: dict,
+    regime_performance_scores: dict = None,
+) -> dict:
+    """Convert regime + confidence into strategy enable/disable dict.
+
+    Low-confidence predictions lower the threshold so more strategies
+    stay enabled (wider safety net). Regime-specific performance scores
+    are preferred over global scores when available.
+
+    Args:
+        regime: Predicted regime string (TREND/RANGE/VOLATILE)
+        confidence: Classifier confidence [0, 1]
+        performance_scores: Global {strategy: score} fallback
+        regime_performance_scores: {regime: {strategy: score}} — preferred when present
+    """
+    base_weights = STRATEGY_WEIGHTS.get(regime, STRATEGY_WEIGHTS["RANGE"])
+
+    # Prefer regime-specific scores so a strategy's TREND performance
+    # doesn't penalise it during RANGE days and vice versa.
+    scores_for_regime = (
+        (regime_performance_scores or {}).get(regime)
+        or (regime_performance_scores or {}).get(regime.upper())
+        or performance_scores
+        or {}
+    )
+
+    # Apply RL-lite feedback from trade performance
+    if scores_for_regime:
+        final_weights = adjust_weights(base_weights, scores_for_regime, blend_ratio=0.4)
+    else:
+        final_weights = dict(base_weights)
+
+    # Adjust threshold: low confidence -> lower threshold -> more strategies enabled
+    effective_threshold = CONFIDENCE_THRESHOLD
+    if confidence < 0.55:
+        effective_threshold *= 0.7  # 0.28 -- nearly everything enabled
+    elif confidence < 0.65:
+        effective_threshold *= 0.85  # 0.34
+
+    overrides = {}
+    for strategy, weight in final_weights.items():
+        overrides[strategy] = bool(weight >= effective_threshold)
+
+    return overrides
 
 
 def classify_rule_based(feat_row: dict) -> tuple[str, float]:
@@ -216,47 +381,89 @@ def classify_rule_based(feat_row: dict) -> tuple[str, float]:
     return "RANGE", 0.52
 
 
-def classify_ml(feat_df: pd.DataFrame, labels: pd.Series, feat_row: dict) -> tuple[str, float, str]:
-    """
-    Train a RandomForestClassifier on historical data and predict tomorrow's regime.
-    Returns (regime, confidence, classifier_name).
+def classify_ml(
+    feat_df: pd.DataFrame,
+    labels: pd.Series,
+    feat_row: dict,
+    prev_regime: str = None,
+    transition_matrix: dict = None,
+) -> tuple[str, float, str, dict]:
+    """Train a calibrated RandomForestClassifier and predict tomorrow's regime.
+
+    Uses Platt/isotonic calibration so confidence values reflect true probabilities
+    (raw RF proba is often overconfident). Markov chain smoothing applied when
+    previous regime and transition matrix are available.
+    Returns (regime, confidence, classifier_name, raw_proba).
     """
     try:
         from sklearn.ensemble import RandomForestClassifier
+        from sklearn.calibration import CalibratedClassifierCV
         from sklearn.preprocessing import LabelEncoder
     except ImportError:
-        return None, None, None
+        return None, None, None, None
 
     X = feat_df[FEATURE_COLS].dropna()
     y = labels.loc[X.index].dropna()
     X = X.loc[y.index]
 
     if len(X) < 30:
-        return None, None, None
+        return None, None, None, None
 
     le = LabelEncoder()
     y_enc = le.fit_transform(y)
 
-    clf = RandomForestClassifier(
-        n_estimators=200,
+    base_clf = RandomForestClassifier(
+        n_estimators=300,
         max_depth=5,
         min_samples_leaf=5,
+        max_features="sqrt",
         random_state=42,
         class_weight="balanced",
     )
-    clf.fit(X, y_enc)
+
+    # Calibrate probabilities so confidence=0.67 actually means 67% accuracy,
+    # not the raw overconfident RF estimate. Use 'isotonic' for n>50, else 'sigmoid'.
+    import numpy as np
+    min_class_count = int(np.bincount(y_enc).min())
+    method = "isotonic" if len(X) >= 60 else "sigmoid"
+    cv_folds = min(3, min_class_count)
+    if cv_folds >= 2:
+        clf = CalibratedClassifierCV(base_clf, cv=cv_folds, method=method)
+        clf.fit(X, y_enc)
+    else:
+        # Insufficient per-class samples for calibration — use base RF directly
+        base_clf.fit(X, y_enc)
+        clf = base_clf
 
     # Build feature row as DataFrame
     row_df = pd.DataFrame([feat_row])[FEATURE_COLS]
     if row_df.isnull().any().any():
-        return None, None, None
+        return None, None, None, None
 
     proba = clf.predict_proba(row_df)[0]
-    pred_idx = proba.argmax()
-    confidence = float(proba[pred_idx])
-    regime = le.inverse_transform([pred_idx])[0]
+    classes = le.classes_
 
-    return regime, confidence, f"RandomForest (n={len(X)} samples)"
+    # Convert to {regime: probability} dict
+    rf_proba = {classes[i]: float(proba[i]) for i in range(len(classes))}
+
+    # Apply Markov chain smoothing if available
+    if prev_regime and transition_matrix:
+        smoothed = smooth_prediction_with_markov(
+            rf_proba, prev_regime, transition_matrix, alpha=0.7
+        )
+        print(f"\n\U0001f517  Markov smoothing (prev={prev_regime}):")
+        for r in REGIME_ORDER:
+            rf_p = rf_proba.get(r, 0.0)
+            sm_p = smoothed.get(r, 0.0)
+            print(f"     {r:<10} RF={rf_p:.2%} -> smoothed={sm_p:.2%}")
+        final_proba = smoothed
+    else:
+        final_proba = rf_proba
+
+    best_regime = max(final_proba, key=final_proba.get)
+    confidence = final_proba[best_regime]
+
+    return best_regime, confidence, f"RandomForest+Markov (n={len(X)} samples)", final_proba
 
 
 # ─── Main ─────────────────────────────────────────────────────────────────────
@@ -328,23 +535,70 @@ def run_classifier(bars_file: Path = None) -> dict:
         return _write_override(regime, confidence, {}, "rule-based (no features)", now_utc)
 
     last_feat = feat_df.iloc[-1][FEATURE_COLS].to_dict()
-    print(f"\n📊  Today's market features:")
+    print(f"\n\U0001f4ca  Today's market features:")
     for k, v in last_feat.items():
         print(f"     {k:<22} {v:+.4f}")
 
-    # ── Try ML classifier ─────────────────────────────────────────
-    regime, confidence, clf_name = classify_ml(feat_df.iloc[:-1], labels.iloc[:-1], last_feat)
+    # -- Compute Markov transition matrix -----------------------------------
+    trans_matrix = compute_transition_matrix(labels)
+    prev_regime = None
+    prev_override = _load_previous_override()
+    if prev_override:
+        prev_regime = prev_override.get("regime")
+    print(f"\n\U0001f517  Markov chain: previous regime = {prev_regime or 'N/A'}")
+
+    # -- Compute trade-performance scores (RL-lite feedback) ----------------
+    perf_scores = compute_strategy_scores(lookback_days=30)
+    regime_perf_scores = compute_regime_strategy_scores(lookback_days=30)
+    if perf_scores:
+        print(f"\n\U0001f4c8  Trade performance scores (last 30d, global):")
+        for strat, score in sorted(perf_scores.items(), key=lambda x: -x[1]):
+            icon = "\U0001f4c8" if score > 0 else "\U0001f4c9"
+            print(f"     {icon} {strat:<20} {score:+.4f}")
+    else:
+        print("\n\U0001f4c8  No trade performance data available yet.")
+
+    if regime_perf_scores:
+        print(f"\n\U0001f4ca  Regime-specific performance scores:")
+        for reg, scores in sorted(regime_perf_scores.items()):
+            for strat, sc in sorted(scores.items(), key=lambda x: -x[1]):
+                icon = "\U0001f4c8" if sc > 0 else "\U0001f4c9"
+                print(f"     {icon} [{reg:<8}] {strat:<20} {sc:+.4f}")
+
+    # -- Try ML classifier with Markov smoothing ----------------------------
+    regime, confidence, clf_name, raw_proba = classify_ml(
+        feat_df.iloc[:-1], labels.iloc[:-1], last_feat,
+        prev_regime=prev_regime, transition_matrix=trans_matrix,
+    )
 
     if regime is None:
-        print("\n⚠️  ML classifier unavailable — using rule-based fallback.")
+        print("\n\u26a0\ufe0f  ML classifier unavailable \u2014 using rule-based fallback.")
         regime, confidence = classify_rule_based(last_feat)
         clf_name = "rule-based"
+        raw_proba = {}
 
-    print(f"\n🎯  Predicted regime : {regime}")
+    print(f"\n\U0001f3af  Predicted regime : {regime}")
     print(f"    Confidence       : {confidence:.0%}")
     print(f"    Classifier       : {clf_name}")
 
-    return _write_override(regime, confidence, last_feat, clf_name, now_utc)
+    return _write_override(
+        regime, confidence, last_feat, clf_name, now_utc,
+        transition_matrix=trans_matrix,
+        performance_scores=perf_scores,
+        regime_performance_scores=regime_perf_scores,
+        raw_proba=raw_proba,
+    )
+
+
+def _load_previous_override() -> dict:
+    """Load the previous config_override.json for Markov chain prior."""
+    if OVERRIDE_FILE.exists():
+        try:
+            with open(OVERRIDE_FILE) as f:
+                return json.load(f)
+        except (json.JSONDecodeError, IOError):
+            pass
+    return {}
 
 
 def _write_override(
@@ -353,9 +607,23 @@ def _write_override(
     diagnostics: dict,
     clf_name: str,
     now_utc: datetime,
+    transition_matrix: dict = None,
+    performance_scores: dict = None,
+    regime_performance_scores: dict = None,
+    raw_proba: dict = None,
 ) -> dict:
-    """Write config_override.json and return the dict."""
-    strategy_overrides = STRATEGY_MAP.get(regime, STRATEGY_MAP["TREND"])
+    """Write config_override.json atomically (temp-file rename) with dynamic strategy weights.
+
+    Atomic write prevents JSON corruption from the race between the nightly
+    classifier thread and the 4-hour intraday check in main.py.
+    """
+    strategy_overrides = resolve_strategy_overrides(
+        regime, confidence, performance_scores or {},
+        regime_performance_scores=regime_performance_scores,
+    )
+
+    # Build the weights detail for transparency
+    base_weights = STRATEGY_WEIGHTS.get(regime, STRATEGY_WEIGHTS["RANGE"])
 
     override = {
         "generated_at": now_utc.isoformat(),
@@ -366,17 +634,33 @@ def _write_override(
         "strategy_overrides": strategy_overrides,
         "diagnostics": {k: round(float(v), 6) if v is not None else None
                         for k, v in diagnostics.items()},
+        "strategy_weights": {k: round(v, 4) for k, v in base_weights.items()},
+        "performance_scores": performance_scores or {},
+        "regime_probabilities": {k: round(v, 4) for k, v in (raw_proba or {}).items()},
+        "transition_matrix": transition_matrix or {},
     }
 
     OVERRIDE_FILE.parent.mkdir(parents=True, exist_ok=True)
-    with open(OVERRIDE_FILE, "w") as f:
-        json.dump(override, f, indent=2)
+    # Atomic write: write to temp file then rename so main.py never reads partial JSON
+    import tempfile
+    import os
+    tmp_fd, tmp_path = tempfile.mkstemp(
+        dir=OVERRIDE_FILE.parent, prefix=".override_tmp_", suffix=".json"
+    )
+    try:
+        with os.fdopen(tmp_fd, "w") as f:
+            json.dump(override, f, indent=2)
+        Path(tmp_path).replace(OVERRIDE_FILE)   # POSIX-atomic rename
+    except Exception:
+        Path(tmp_path).unlink(missing_ok=True)
+        raise
 
-    print(f"\n✅  Written to: {OVERRIDE_FILE}")
-    print(f"\n📋  Strategy overrides for tomorrow:")
+    print(f"\n\u2705  Written to: {OVERRIDE_FILE}")
+    print(f"\n\U0001f4cb  Strategy overrides for tomorrow (threshold={CONFIDENCE_THRESHOLD:.2f}):")
     for strat, enabled in strategy_overrides.items():
-        icon = "✅" if enabled else "❌"
-        print(f"     {icon}  {strat}")
+        w = base_weights.get(strat, 0.0)
+        icon = "\u2705" if enabled else "\u274c"
+        print(f"     {icon}  {strat:<20} (weight={w:.2f})")
     print()
 
     return override
