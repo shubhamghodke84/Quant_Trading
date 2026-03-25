@@ -47,7 +47,7 @@ class BreakoutStrategy(BaseStrategy):
 
         # Volume confirmation
         self.volume_confirmation = config.get('volume_confirmation', True)
-        self.volume_ratio_min = config.get('volume_ratio_min', 1.2)
+        self.volume_ratio_min = config.get('volume_ratio_min', 1.3)
 
         # RSI overbought/oversold guards
         self.rsi_overbought = config.get('rsi_overbought', 75)
@@ -61,7 +61,9 @@ class BreakoutStrategy(BaseStrategy):
         self.stoch_oversold = config.get('stoch_oversold', 20)
 
         # Minimum signal strength to emit a signal
-        self.min_signal_strength = config.get('min_signal_strength', 0.65)
+        self.min_signal_strength = config.get('min_signal_strength', 0.70)
+        # Breakout bar body must be this fraction of ATR to filter doji/wick-only breakouts
+        self.min_body_atr_ratio = config.get('min_body_atr_ratio', 0.35)
 
         # Multi-timeframe confirmation
         self.mtf_confirmation = config.get('mtf_confirmation', False)
@@ -109,7 +111,7 @@ class BreakoutStrategy(BaseStrategy):
         if not self.is_enabled():
             return None
 
-        if len(bars) < self.donchian_period + self.bb_squeeze_lookback + 5:
+        if len(bars) < self.donchian_period + self.bb_squeeze_lookback * 2 + 5:
             self._log_no_signal("Insufficient data")
             return None
 
@@ -134,23 +136,33 @@ class BreakoutStrategy(BaseStrategy):
         current_atr = atr.iloc[-1]
         current_rsi = rsi.iloc[-1]
         current_adx = adx.iloc[-1]
+        prev_adx = adx.iloc[-2]
         current_vwap = vwap.iloc[-1]
         current_stoch_k = stoch_k.iloc[-1]
         current_bb_width = bb_w.iloc[-1]
 
-        if any(pd.isna([current_atr, current_rsi, current_adx, current_vwap,
+        if any(pd.isna([current_atr, current_rsi, current_adx, prev_adx, current_vwap,
                          current_stoch_k, current_bb_width])):
             self._log_no_signal("Indicator calculation failed")
             return None
 
-        # BB squeeze check: BB width at breakout bar must be below its recent average
-        # (the market coiled before the breakout, making it a genuine expansion)
-        bb_width_avg = bb_w.iloc[-self.bb_squeeze_lookback - 1:-1].mean()
-        bb_squeeze_ok = current_bb_width <= bb_width_avg * 1.1  # allow 10% buffer
+        # ADX must be rising into the breakout — confirms strengthening trend momentum
+        adx_rising = current_adx > prev_adx
+        if not adx_rising:
+            self._log_no_signal(
+                f"ADX not rising ({current_adx:.1f} <= {prev_adx:.1f}), breakout lacks momentum")
+            return None
+
+        # BB squeeze check: the PRIOR lookback period must have been tighter than the
+        # period before it — confirms coiling happened before this breakout bar.
+        # (Checking the current bar is wrong: it's expanding by definition at breakout.)
+        bb_recent_avg = bb_w.iloc[-self.bb_squeeze_lookback - 1:-1].mean()
+        bb_prior_avg = bb_w.iloc[-self.bb_squeeze_lookback * 2 - 1:-self.bb_squeeze_lookback - 1].mean()
+        bb_squeeze_ok = (bb_prior_avg > 0) and (bb_recent_avg < bb_prior_avg * 1.05)
 
         if not bb_squeeze_ok:
             self._log_no_signal(
-                f"No BB squeeze: width={current_bb_width:.4f} > avg={bb_width_avg:.4f}")
+                f"No BB squeeze: recent_avg={bb_recent_avg:.4f} not tight vs prior_avg={bb_prior_avg:.4f}")
             return None
 
         # Use previous channel values for breakout level
@@ -169,8 +181,19 @@ class BreakoutStrategy(BaseStrategy):
             else:
                 volume_ok = True  # no volume data — skip check
 
+        # Breakout bar body size: (|open - close|) must be >= min_body_atr_ratio × ATR
+        # This filters doji bars and wick-only breakouts that have low follow-through probability.
+        current_open = float(bars['open'].iloc[-1])
+        bar_body = abs(current_close - current_open)
+        min_body = float(current_atr) * self.min_body_atr_ratio
+
         # --- Bullish breakout ---
         if current_close > breakout_upper:
+
+            if bar_body < min_body:
+                self._log_no_signal(
+                    f"Bullish breakout: bar body too small ({bar_body:.2f} < {min_body:.2f} ATR*{self.min_body_atr_ratio})")
+                return None
 
             if current_adx < self.adx_min_threshold:
                 self._log_no_signal(f"ADX too low ({current_adx:.1f} < {self.adx_min_threshold})")
@@ -245,6 +268,11 @@ class BreakoutStrategy(BaseStrategy):
 
         # --- Bearish breakout ---
         if current_close < breakout_lower:
+
+            if bar_body < min_body:
+                self._log_no_signal(
+                    f"Bearish breakout: bar body too small ({bar_body:.2f} < {min_body:.2f} ATR*{self.min_body_atr_ratio})")
+                return None
 
             if current_adx < self.adx_min_threshold:
                 self._log_no_signal(
