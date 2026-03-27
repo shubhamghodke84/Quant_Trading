@@ -17,8 +17,8 @@ symbols:
   XAUUSD:
     enabled: true
     pip_value: 0.01
-    min_lot: 0.02             # System minimum
-    max_lot: 0.10             # Scaled for 50K — allows larger position management
+    min_lot: 0.04             # System minimum
+    max_lot: 0.04             # Scaled for 50K — allows larger position management
     lot_step: 0.01
     value_per_lot: 100
     commission_per_lot: 0.0
