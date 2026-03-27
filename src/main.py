@@ -455,8 +455,8 @@ class TradingSystem:
         # -- Intra-day regime shift check (self-throttled to every 4h) ------
         self._check_intraday_regime_shift()
 
-        # ── Daily profit target gate (realized only — unrealized is volatile) ──
-        daily_pnl = float(self.portfolio_engine.daily_realized_pnl)
+        # ── Daily profit target gate ──────────────────────────────────────────
+        daily_pnl = float(self._get_daily_pnl())
         if self._max_daily_profit > 0 and daily_pnl >= self._max_daily_profit:
             if self.loop_iteration % 60 == 1:
                 self.logger.info(
@@ -816,10 +816,31 @@ class TradingSystem:
             self.logger.debug(f"[RegimeML] Intra-day check skipped: {e}")
 
 
+    def _get_daily_pnl(self) -> Decimal:
+        """
+        Daily P&L computed as (current MT5 equity) − (equity at start of today).
+
+        This is the authoritative figure used by The5ers and other prop firms —
+        it includes swap charges, broker commissions, and manual trades that the
+        internal portfolio accumulator misses.
+
+        Falls back to the internal accumulator only when daily_start_equity has
+        not been set yet (e.g., first tick after a fresh start before midnight
+        reset runs).
+        """
+        daily_start = self.risk_engine.daily_start_equity
+        if daily_start <= 0:
+            return self.portfolio_engine.daily_realized_pnl
+        try:
+            account_info = self._get_effective_account_info()
+            return Decimal(str(account_info['equity'])) - daily_start
+        except Exception:
+            return self.portfolio_engine.daily_realized_pnl
+
     def _get_effective_account_info(self) -> Dict[str, Decimal]:
         """
         Get account info with paper trading override if enabled.
-        
+
         Returns:
             Dict with balance, equity, etc.
         """
@@ -840,18 +861,18 @@ class TradingSystem:
     def _execute_signal(self, signal) -> None:
         """Execute trading signal."""
         try:
+            # Get current account state first (needed for daily P&L and order submission)
+            account_info = self._get_effective_account_info()
+
             # ── Daily profit target gate ──────────────────────────────
-            daily_pnl = float(self.portfolio_engine.daily_realized_pnl + self.portfolio_engine.get_total_unrealized_pnl())
-            if self._max_daily_profit > 0 and daily_pnl >= self._max_daily_profit:
+            daily_pnl = self._get_daily_pnl()
+            if self._max_daily_profit > 0 and float(daily_pnl) >= self._max_daily_profit:
                 self.logger.info(
-                    f"[SessionManager] Daily target hit (${daily_pnl:.2f}) — signal suppressed",
+                    f"[SessionManager] Daily target hit (${float(daily_pnl):.2f}) — signal suppressed",
                     strategy=signal.strategy_name,
                 )
                 return
 
-            # Get current account state
-            account_info = self._get_effective_account_info()
-            
             # CRITICAL: Get positions directly from MT5 (live source of truth)
             # Portfolio engine's internal list can be stale between reconciliation cycles,
             # causing the one-direction check to miss existing positions
@@ -860,8 +881,6 @@ class TradingSystem:
             except Exception:
                 # Fallback to portfolio engine if MT5 fetch fails
                 mt5_positions = {str(p.position_id): p for p in self.portfolio_engine.get_all_positions()}
-            
-            daily_pnl = self.portfolio_engine.daily_realized_pnl + self.portfolio_engine.get_total_unrealized_pnl()
             
             # ── The5ers Rule: Directional Lock ────────────────────────────
             # No SELL allowed if a BUY is open; no BUY allowed if a SELL is open.
@@ -1149,7 +1168,7 @@ class TradingSystem:
                         # with flat trades.
                         if pnl > 0:
                             self._consecutive_losses_today = 0  # reset only on actual win
-                            current_daily_pnl = float(self.portfolio_engine.daily_realized_pnl)
+                            current_daily_pnl = float(self._get_daily_pnl())
                             outcome = 'WIN'
                             self.logger.info(
                                 f"[SessionManager] {outcome} recorded — "
@@ -1268,18 +1287,19 @@ class TradingSystem:
             portfolio_stats = self.portfolio_engine.get_statistics()
             # Use real account info from MT5, not portfolio totals
             account_info = self._get_effective_account_info()
+            daily_pnl = self._get_daily_pnl()
             risk_metrics = self.risk_engine.get_risk_metrics(
                 account_balance=account_info['balance'],
                 account_equity=account_info['equity'],
                 current_positions={p.position_id: p for p in self.portfolio_engine.get_all_positions()},
-                daily_pnl=Decimal(str(portfolio_stats.get('daily_realized_pnl', 0)))
+                daily_pnl=daily_pnl
             )
-            
+
             self.logger.info(
                 "System metrics",
                 iteration=self.loop_iteration,
                 positions=portfolio_stats['total_positions'],
-                daily_pnl=portfolio_stats['daily_realized_pnl'],
+                daily_pnl=float(daily_pnl),
                 total_pnl=portfolio_stats['total_pnl'],
                 kill_switch=risk_metrics.kill_switch_active
             )
