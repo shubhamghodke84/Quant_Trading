@@ -151,6 +151,19 @@ class MeanReversionStrategy(BaseStrategy):
         current_bb_lower = float(bb_lower.iloc[-1]) if not pd.isna(bb_lower.iloc[-1]) else current_close
         current_bb_upper = float(bb_upper.iloc[-1]) if not pd.isna(bb_upper.iloc[-1]) else current_close
 
+        # Stochastic extreme: independent oscillator confirmation at the reversal point
+        stoch_k, _ = Indicators.stochastic(bars, period=14)
+        current_stoch = float(stoch_k.iloc[-1]) if not pd.isna(stoch_k.iloc[-1]) else 50.0
+
+        # Volume climax: mean reversions fire best at panic volume peaks (selling/buying exhaustion)
+        has_volume = 'volume' in bars.columns
+        if has_volume:
+            current_volume = float(bars['volume'].iloc[-1])
+            avg_volume = float(bars['volume'].iloc[-21:-1].mean())
+            volume_climax = (avg_volume > 0) and (current_volume >= 1.5 * avg_volume)
+        else:
+            volume_climax = True  # Skip check when volume unavailable
+
         # Buy Signal (Oversold)
         if current_z < entry_thresh_long:
             if current_rsi > 40.0:
@@ -172,6 +185,18 @@ class MeanReversionStrategy(BaseStrategy):
                 self._log_no_signal(
                     f"MeanRev BUY: RSI not decelerating (RSI: {prev2_rsi:.1f}→{prev_rsi:.1f}→{current_rsi:.1f})")
                 return None
+
+            # Stochastic must also be in oversold territory — independent oscillator confirmation
+            if current_stoch > 25.0:
+                self._log_no_signal(
+                    f"MeanRev BUY: Stochastic not oversold ({current_stoch:.1f} > 25)")
+                return None
+
+            # Volume climax: require panic/exhaustion volume at the reversal point
+            if not volume_climax:
+                self._log_no_signal("MeanRev BUY: no volume climax at extreme (volume < 1.5× avg)")
+                return None
+
             return self._create_signal(
                 side=OrderSide.BUY,
                 strength=min(abs(current_z) / 3, 1.0),
@@ -207,6 +232,18 @@ class MeanReversionStrategy(BaseStrategy):
                 self._log_no_signal(
                     f"MeanRev SELL: RSI not decelerating (RSI: {prev2_rsi:.1f}→{prev_rsi:.1f}→{current_rsi:.1f})")
                 return None
+
+            # Stochastic must also be in overbought territory
+            if current_stoch < 75.0:
+                self._log_no_signal(
+                    f"MeanRev SELL: Stochastic not overbought ({current_stoch:.1f} < 75)")
+                return None
+
+            # Volume climax: require buying exhaustion volume
+            if not volume_climax:
+                self._log_no_signal("MeanRev SELL: no volume climax at extreme (volume < 1.5× avg)")
+                return None
+
             return self._create_signal(
                 side=OrderSide.SELL,
                 strength=min(abs(current_z) / 3, 1.0),
