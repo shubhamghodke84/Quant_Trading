@@ -23,6 +23,16 @@ class RiskProcessor:
         from ..monitoring.logger import get_logger
         self.logger = get_logger(__name__)
 
+    # Maps internal strategy names to their config YAML keys
+    _CONFIG_KEY_MAP = {
+        'donchian_breakout': 'breakout',
+        'momentum_scalp': 'momentum',
+        'zscore_mean_reversion': 'mean_reversion',
+        'vwap_deviation': 'vwap',
+        'kalman_regime': 'kalman_regime',
+        'mini_medallion': 'mini_medallion',
+    }
+
     def calculate_stops(self, signal: Signal) -> Signal:
         """
         Attaches calculated stop_loss and take_profit to the Signal object inline.
@@ -32,8 +42,9 @@ class RiskProcessor:
         entry = Decimal(str(signal.entry_price))
         side = signal.side
 
-        # Load specific strategy risk configurations
-        strat_cfg = self.strategies_config.get(strategy_name, {})
+        # Load specific strategy risk configurations using the correct YAML key
+        config_key = self._CONFIG_KEY_MAP.get(strategy_name, strategy_name)
+        strat_cfg = self.strategies_config.get(config_key, {})
         
         sl = None
         tp = None
