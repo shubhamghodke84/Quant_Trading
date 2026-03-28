@@ -15,6 +15,7 @@ import pandas as pd
 from datetime import datetime, timezone, timedelta
 
 from .base_strategy import BaseStrategy
+from ..core.constants import MarketRegime
 from .breakout_strategy import BreakoutStrategy
 from .mean_reversion_strategy import MeanReversionStrategy
 from .vwap_strategy import VWAPStrategy
@@ -199,6 +200,18 @@ class StrategyManager:
         if strategy:
             strategy.disable()
     
+    def set_ml_regime_all(self, symbol: str, regime: Optional[MarketRegime]) -> None:
+        """
+        Push ML-predicted regime to every strategy for the given symbol.
+
+        Each strategy then uses this instead of its rule-based RegimeFilter
+        until the next override is applied (or None is passed to revert).
+        """
+        if symbol not in self.strategies:
+            return
+        for strategy in self.strategies[symbol].values():
+            strategy.set_ml_regime(regime)
+
     def get_all_strategies(self) -> Dict[str, Dict[str, BaseStrategy]]:
         """Get all strategies."""
         return self.strategies

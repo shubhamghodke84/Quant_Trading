@@ -210,16 +210,24 @@ class VWAPStrategy(BaseStrategy):
         except AttributeError:
             pass
 
-        # ── H1 regime check (cached — only recomputed every 60 bars) ─────
-        if self._get_h1_regime(bars) == MarketRegime.TREND:
-            self._log_no_signal("H1 regime is TREND — no mean reversion")
-            return None
+        # ── Regime check ─────────────────────────────────────────────────
+        # When ML regime is available use it for both checks; otherwise fall
+        # back to H1 cached + 1m rule-based classification.
+        if self.ml_regime is not None:
+            if self.ml_regime != self.only_in_regime:
+                self._log_no_signal(f"ML regime={self.ml_regime.value}, need {self.only_in_regime.value}")
+                return None
+        else:
+            # H1 regime check (cached — only recomputed every 60 bars)
+            if self._get_h1_regime(bars) == MarketRegime.TREND:
+                self._log_no_signal("H1 regime is TREND — no mean reversion")
+                return None
 
-        # ── 1m regime check ───────────────────────────────────────────────
-        regime = self.regime_filter.classify(bars)
-        if regime != self.only_in_regime:
-            self._log_no_signal(f"1m regime={regime.value}, need {self.only_in_regime.value}")
-            return None
+            # 1m regime check
+            regime = self.regime_filter.classify(bars)
+            if regime != self.only_in_regime:
+                self._log_no_signal(f"1m regime={regime.value}, need {self.only_in_regime.value}")
+                return None
 
         # ── Session-anchored VWAP with StdDev bands ───────────────────────
         vwap, upper_band, lower_band, partial_lower = _compute_session_vwap(
