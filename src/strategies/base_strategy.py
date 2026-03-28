@@ -143,11 +143,18 @@ class BaseStrategy(ABC):
     
     def _log_no_signal(self, reason: str) -> None:
         """Log why no signal was generated (INFO so it's visible in normal logs)."""
+        import re
         if not hasattr(self, '_last_no_signal_reason'):
             self._last_no_signal_reason = None
-            
-        if reason != self._last_no_signal_reason:
+
+        # Strip numeric values to deduplicate reasons that differ only in indicator values
+        # e.g. "No BB squeeze: recent_avg=0.0072 not tight vs prior_avg=0.0064"
+        #  and "No BB squeeze: recent_avg=0.0081 not tight vs prior_avg=0.0061"
+        # are treated as the same reason type to avoid per-bar log spam
+        reason_key = re.sub(r'[-+]?\d+\.?\d*', '#', reason)
+
+        if reason_key != self._last_no_signal_reason:
             self.logger.info(f"No signal: {reason}")
-            self._last_no_signal_reason = reason
+            self._last_no_signal_reason = reason_key
         else:
             self.logger.debug(f"No signal: {reason}")
