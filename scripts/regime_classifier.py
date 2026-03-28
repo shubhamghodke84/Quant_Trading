@@ -45,7 +45,22 @@ from scripts.strategy_scorer import compute_strategy_scores, compute_regime_stra
 
 OVERRIDE_FILE = PROJECT_ROOT / "data" / "config_override.json"
 DEFAULT_BARS = PROJECT_ROOT / "data" / "historical" / "XAUUSD_5m_real.csv"
-LIVE_LOG_BARS = PROJECT_ROOT / "data" / "logs" / "candle_store_XAUUSD_5m.csv"
+LIVE_LOG_DIR = PROJECT_ROOT / "data" / "logs"
+
+
+def _discover_live_candle_csvs() -> list:
+    """Auto-discover all XAUUSD-variant candle_store CSVs in data/logs/.
+
+    The bot may store bars under XAUUSD, XAUUSD.x, XAUUSD.e, XAUUSD.w, etc.
+    depending on which broker symbol variant is active. This function finds
+    all of them so the classifier always has the freshest live data.
+
+    Returns:
+        List of Path objects to candle_store CSV files.
+    """
+    if not LIVE_LOG_DIR.exists():
+        return []
+    return sorted(LIVE_LOG_DIR.glob("candle_store_XAUUSD*_5m.csv"))
 
 
 # --- Feature Engineering ---------------------------------------------------
@@ -479,8 +494,10 @@ def run_classifier(bars_file: Path = None) -> dict:
     print(f"{'='*60}\n")
 
     # ── Load and Stitch bars ─────────────────────────────────────
-    # Combine the long-term static history with the recent live data.
-    sources = [DEFAULT_BARS, LIVE_LOG_BARS]
+    # Combine long-term static history with all recent live candle_store
+    # CSVs. Live files are appended AFTER historical so that
+    # drop_duplicates(keep='last') preserves newer live data.
+    sources = [DEFAULT_BARS] + _discover_live_candle_csvs()
     if bars_file:
         sources.append(bars_file)
 
