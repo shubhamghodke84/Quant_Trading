@@ -134,22 +134,17 @@ strategies:
 
   breakout:
     enabled: true
-    timeframe: 5m                 # 5m candles — less noise than 1m
+    timeframe: 5m
     donchian_period: 20
-    confirmation_bars: 1
-    rr_ratio: 2.5             # $15 risk × 2.5 = $37.50 target (mid of $30–$45 range)
+    rr_ratio: 2.5             # $15 risk × 2.5 = $37.50 target
     only_in_regime: TREND
-    mtf_confirmation: true
-    atr_stop_multiplier: 1.5  # Targets ~45 pip stop on XAUUSD 1m
-    adx_min_threshold: 25
-    volume_confirmation: true
-    volume_ratio_min: 1.2
+    atr_stop_multiplier: 1.5
+    adx_min_threshold: 20        # Relaxed from 25 — 5m needs lower bar
+    min_body_atr_ratio: 0.30     # Relaxed from 0.45 — gold 5m bars are often wicks
+    volume_confirmation: false   # MT5 tick volume unreliable on 5m
     rsi_overbought: 75
     rsi_oversold: 25
-    bb_squeeze_lookback: 10       # Reduced from 20 → min_bars = 35 (was 45, was blocking with 44 bars!)
-    stoch_overbought: 80
-    stoch_oversold: 20
-    min_signal_strength: 0.65
+    atr_spike_mult: 1.5
 
   mean_reversion:
     enabled: false               # DISABLED: Too risky for prop firm challenge — XAUUSD trends strongly
