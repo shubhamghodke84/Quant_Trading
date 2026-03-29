@@ -61,15 +61,14 @@ def parse_mt5_csv(path: Path) -> pd.DataFrame:
     fmt = detect_mt5_format(df)
 
     if fmt == 'datetime_split':
-        # Merge DATE and TIME columns
+        # Merge DATE and TIME columns with explicit format (avoids slow per-row inference)
         df['timestamp'] = pd.to_datetime(
             df['DATE'].astype(str) + ' ' + df['TIME'].astype(str),
-            format='mixed',
-            dayfirst=False,
+            format='%Y.%m.%d %H:%M:%S',
         )
     elif fmt == 'datetime_combined':
         first_col = df.columns[0]
-        df['timestamp'] = pd.to_datetime(df[first_col], format='mixed')
+        df['timestamp'] = pd.to_datetime(df[first_col], format='%Y.%m.%d %H:%M:%S')
     else:
         raise ValueError(
             "Unknown MT5 format. Expected columns: <DATE> <TIME> <OPEN> <HIGH> <LOW> <CLOSE> <TICKVOL>"
@@ -101,7 +100,10 @@ def parse_mt5_csv(path: Path) -> pd.DataFrame:
 
     out = df[['timestamp', 'open', 'high', 'low', 'close', 'volume']].copy()
     out = out.dropna(subset=['open', 'high', 'low', 'close'])
-    out = out.sort_values('timestamp').reset_index(drop=True)
+    # Skip sort if already ordered (MT5 exports are typically pre-sorted)
+    if not out['timestamp'].is_monotonic_increasing:
+        out = out.sort_values('timestamp')
+    out = out.reset_index(drop=True)
     return out
 
 
