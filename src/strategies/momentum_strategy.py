@@ -35,7 +35,6 @@ from typing import Optional
 import pandas as pd
 
 from .base_strategy import BaseStrategy
-from .regime_filter import RegimeFilter
 from ..core.types import Symbol, Signal
 from ..core.constants import MarketRegime, OrderSide
 from ..data.indicators import Indicators
@@ -93,8 +92,6 @@ class MomentumStrategy(BaseStrategy):
         self._h1_last_len: int = 0
         self._h1_trend_cached: Optional[bool] = None
 
-        self.regime_filter = RegimeFilter()
-
     def get_name(self) -> str:
         return "momentum_scalp"
 
@@ -140,12 +137,9 @@ class MomentumStrategy(BaseStrategy):
         # Trim to 400 bars — enough to warm up all EMAs (O(N) indicator cost mitigation)
         bars = bars.tail(400)
 
-        # Regime check — use ML prediction when available, else fall back to rule-based.
-        regime = self.ml_regime if self.ml_regime is not None else self.regime_filter.classify(bars)
-        if regime != self.only_in_regime:
-            source = "ML" if self.ml_regime is not None else "rule"
-            self._log_no_signal(f"Regime is {regime.value} ({source}), need {self.only_in_regime.value}")
-            return None
+        # Regime filter removed — ADX + EMA stack already confirm trend.
+        # RegimeFilter returned UNKNOWN/RANGE on 5m gold, blocking most entries.
+        regime = self.ml_regime if self.ml_regime is not None else MarketRegime.TREND
 
         # Calculate indicators
         rsi = Indicators.rsi(bars, period=self.rsi_period)
@@ -218,10 +212,10 @@ class MomentumStrategy(BaseStrategy):
         rsi_bullish = current_rsi > self.rsi_bull_threshold
         rsi_not_overbought = current_rsi < self.rsi_overbought
         rsi_rising = current_rsi_slope > 0
-        # 3-bar MACD histogram persistence filters whipsaws (≈15m at 5m bars = 10m+ confirmation)
-        macd_positive = (current_histogram > 0 and prev_histogram > 0 and prev2_histogram > 0)
-        # True acceleration: all 3 bars must be ascending in absolute magnitude
-        macd_accelerating = (abs(current_histogram) > abs(prev_histogram) > abs(prev2_histogram))
+        # 2-bar MACD histogram persistence (relaxed from 3-bar — too strict on 5m)
+        macd_positive = (current_histogram > 0 and prev_histogram > 0)
+        # Acceleration: current bar stronger than previous (relaxed from 3-bar chain)
+        macd_accelerating = abs(current_histogram) > abs(prev_histogram)
         price_above_ema = current_close > current_ema
         ema_rising = current_ema > prev_ema
         # Entry proximity: price must be within 2×ATR of EMA20 — avoids chasing overextended moves
@@ -277,9 +271,9 @@ class MomentumStrategy(BaseStrategy):
         rsi_bearish = current_rsi < self.rsi_bear_threshold
         rsi_not_oversold = current_rsi > self.rsi_oversold
         rsi_falling = current_rsi_slope < 0
-        macd_negative = (current_histogram < 0 and prev_histogram < 0 and prev2_histogram < 0)
-        # True deepening: all 3 bars ascending in absolute magnitude
-        macd_deepening = (abs(current_histogram) > abs(prev_histogram) > abs(prev2_histogram))
+        macd_negative = (current_histogram < 0 and prev_histogram < 0)
+        # Deepening: current bar stronger than previous (relaxed from 3-bar chain)
+        macd_deepening = abs(current_histogram) > abs(prev_histogram)
         price_below_ema = current_close < current_ema
         ema_falling = current_ema < prev_ema
         # Entry proximity: price must be within 2×ATR below EMA20 — avoids shorting into exhaustion
