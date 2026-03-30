@@ -28,6 +28,10 @@ class MiniMedallionStrategy(BaseStrategy):
         self.timeframe = config.get('timeframe', '1m')
         self.score_threshold = config.get('score_threshold', 3.0)
         self.fixed_lot = config.get('fixed_lot', None)
+
+        # Trade cooldown: minimum bars between signals to prevent overtrading
+        self.cooldown_bars = config.get('cooldown_bars', 30)
+        self._bars_since_signal = self.cooldown_bars
         
         # Signal Weights
         self.weights = config.get('weights', {
@@ -49,6 +53,11 @@ class MiniMedallionStrategy(BaseStrategy):
     def on_bar(self, bars: pd.DataFrame) -> Optional[Signal]:
         # Need enough bars for 30-period VWAP and other indicators
         if len(bars) < 50:
+            return None
+
+        # Cooldown to prevent overtrading
+        self._bars_since_signal += 1
+        if self._bars_since_signal < self.cooldown_bars:
             return None
 
         # Calculate base indicators
@@ -89,9 +98,18 @@ class MiniMedallionStrategy(BaseStrategy):
             side = OrderSide.BUY
         elif alpha_score < -self.score_threshold:
             side = OrderSide.SELL
-            
+
         if side is None:
             return None
+
+        # EMA trend alignment: only take signals in direction of 50-period EMA
+        ema50 = Indicators.ema(bars, period=50)
+        current_ema50 = float(ema50.iloc[-1])
+        current_close = float(bars['close'].iloc[-1])
+        if side == OrderSide.BUY and current_close < current_ema50:
+            return None  # Don't buy below EMA50
+        if side == OrderSide.SELL and current_close > current_ema50:
+            return None  # Don't sell above EMA50
 
         # Determine Regime based on ADX
         current_adx = float(adx.iloc[-1])
@@ -110,6 +128,9 @@ class MiniMedallionStrategy(BaseStrategy):
         }
         if self.fixed_lot:
             metadata['fixed_lot'] = self.fixed_lot
+
+        # Reset cooldown
+        self._bars_since_signal = 0
 
         # Return Signal
         return self._create_signal(
