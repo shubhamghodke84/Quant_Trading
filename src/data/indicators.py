@@ -82,10 +82,10 @@ class Indicators:
         # Calculate ATR
         atr = Indicators.atr(df, period)
         
-        # Calculate +DI and -DI
-        plus_dm_smooth = pd.Series(plus_dm).rolling(window=period).sum()
-        minus_dm_smooth = pd.Series(minus_dm).rolling(window=period).sum()
-        
+        # Calculate +DI and -DI (preserve original index for alignment with ATR)
+        plus_dm_smooth = pd.Series(plus_dm, index=df.index).rolling(window=period).sum()
+        minus_dm_smooth = pd.Series(minus_dm, index=df.index).rolling(window=period).sum()
+
         plus_di = 100 * (plus_dm_smooth / atr)
         minus_di = 100 * (minus_dm_smooth / atr)
         
