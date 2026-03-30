@@ -115,25 +115,25 @@ class SimulatedBroker:
             bar_low = Decimal(str(current_bar.low))
             bar_high = Decimal(str(current_bar.high))
 
-        positions_to_close = []
+        positions_to_close = {}
 
         for pos_id, position in self.positions.items():
-            # Check stop loss
+            # Check stop loss (SL assumed hit first if both SL and TP触 on same bar)
             if position.stop_loss:
                 if position.side == PositionSide.LONG and bar_low <= position.stop_loss:
-                    positions_to_close.append((pos_id, position.stop_loss, 'stop_loss'))
+                    positions_to_close[pos_id] = (position.stop_loss, 'stop_loss')
                 elif position.side == PositionSide.SHORT and bar_high >= position.stop_loss:
-                    positions_to_close.append((pos_id, position.stop_loss, 'stop_loss'))
+                    positions_to_close[pos_id] = (position.stop_loss, 'stop_loss')
 
-            # Check take profit
-            if position.take_profit:
+            # Check take profit (only if not already marked for SL)
+            if pos_id not in positions_to_close and position.take_profit:
                 if position.side == PositionSide.LONG and bar_high >= position.take_profit:
-                    positions_to_close.append((pos_id, position.take_profit, 'take_profit'))
+                    positions_to_close[pos_id] = (position.take_profit, 'take_profit')
                 elif position.side == PositionSide.SHORT and bar_low <= position.take_profit:
-                    positions_to_close.append((pos_id, position.take_profit, 'take_profit'))
+                    positions_to_close[pos_id] = (position.take_profit, 'take_profit')
 
         # Close positions
-        for pos_id, exit_price, exit_reason in positions_to_close:
+        for pos_id, (exit_price, exit_reason) in positions_to_close.items():
             self._close_position(pos_id, exit_price, exit_reason)
     
     def _close_position(self, position_id: str, exit_price: Decimal, reason: str) -> None:
