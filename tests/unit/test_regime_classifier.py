@@ -245,21 +245,25 @@ class TestDynamicWeighting:
         assert overrides["breakout"] is True
         assert overrides["momentum"] is True
 
-    def test_range_regime_enables_vwap(self):
-        """RANGE regime should enable vwap."""
+    def test_range_regime_enables_all_profitable(self):
+        """RANGE regime should enable all 4 profitable strategies."""
         overrides = resolve_strategy_overrides("RANGE", 0.80, {})
-        assert overrides["vwap"] is True
+        assert overrides["breakout"] is True
+        assert overrides["momentum"] is True
+        assert overrides["kalman_regime"] is True
+        assert overrides["mini_medallion"] is True
 
     def test_volatile_regime_enables_kalman(self):
         """VOLATILE regime should enable kalman_regime."""
         overrides = resolve_strategy_overrides("VOLATILE", 0.80, {})
         assert overrides["kalman_regime"] is True
 
-    def test_mean_reversion_disabled_by_default(self):
-        """mean_reversion should be disabled in all regimes by default."""
+    def test_unprofitable_strategies_disabled_by_default(self):
+        """mean_reversion and vwap should be disabled in all regimes by default."""
         for regime in REGIMES:
             overrides = resolve_strategy_overrides(regime, 0.80, {})
             assert overrides["mean_reversion"] is False
+            assert overrides["vwap"] is False
 
     def test_low_confidence_enables_more_strategies(self):
         """Low confidence (< 0.55) should lower threshold, enabling more strategies."""
@@ -274,11 +278,13 @@ class TestDynamicWeighting:
             f"low={low_enabled}, high={high_enabled}"
         )
 
-    def test_different_regimes_produce_different_overrides(self):
-        """Different regimes should produce different strategy selections."""
-        trend = resolve_strategy_overrides("TREND", 0.80, {})
-        range_ = resolve_strategy_overrides("RANGE", 0.80, {})
-        assert trend != range_, "TREND and RANGE should differ"
+    def test_all_regimes_enable_four_profitable_strategies(self):
+        """All regimes should enable the 4 profitable strategies."""
+        for regime in REGIMES:
+            overrides = resolve_strategy_overrides(regime, 0.80, {})
+            enabled = [s for s, v in overrides.items() if v]
+            assert set(enabled) == {"breakout", "momentum", "kalman_regime", "mini_medallion"}, \
+                f"{regime} should enable all 4 profitable strategies, got {enabled}"
 
     def test_weights_table_completeness(self):
         """Every regime in STRATEGY_WEIGHTS should have all 6 strategies."""

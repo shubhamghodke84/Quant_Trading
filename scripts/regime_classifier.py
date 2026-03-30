@@ -219,25 +219,25 @@ STRATEGY_WEIGHTS = {
     "TREND": {
         "breakout":       0.85,
         "momentum":       0.80,
-        "kalman_regime":  0.70,
-        "mean_reversion": 0.10,  # stays low by default (prop challenge guard)
-        "vwap":           0.25,
+        "kalman_regime":  0.90,
+        "mean_reversion": 0.00,  # disabled: -1.63%, PF 0.40, 15% WR — no edge on gold
+        "vwap":           0.00,  # disabled: -0.98%, PF 0.77 — loses money on trending gold
         "mini_medallion": 0.65,
     },
     "RANGE": {
-        "breakout":       0.15,
-        "momentum":       0.20,
-        "kalman_regime":  0.60,
-        "mean_reversion": 0.15,  # low default, can be boosted by trade feedback
-        "vwap":           0.85,
-        "mini_medallion": 0.55,
+        "breakout":       0.60,  # raised: cooldown-improved breakout works across regimes
+        "momentum":       0.55,  # raised: still captures pullback momentum entries in range
+        "kalman_regime":  0.75,  # raised: range-mode OU mean-reversion is Kalman's strength
+        "mean_reversion": 0.00,  # disabled: backtest confirmed no edge
+        "vwap":           0.00,  # disabled: backtest confirmed no edge
+        "mini_medallion": 0.60,
     },
     "VOLATILE": {
-        "breakout":       0.20,
-        "momentum":       0.30,
+        "breakout":       0.55,  # raised: breakout captures vol expansion moves
+        "momentum":       0.50,  # raised: momentum rides vol-driven trends
         "kalman_regime":  0.90,
-        "mean_reversion": 0.10,
-        "vwap":           0.40,
+        "mean_reversion": 0.00,  # disabled
+        "vwap":           0.00,  # disabled
         "mini_medallion": 0.70,
     },
 }

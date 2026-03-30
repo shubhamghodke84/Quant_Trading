@@ -157,7 +157,7 @@ strategies:
     cooldown_bars: 8               # New: breaks consecutive loss streaks (was 23 max)
 
   mean_reversion:
-    enabled: true               # DISABLED: -1.6%, 15% WR — no edge on trending gold
+    enabled: false              # -1.63%, PF 0.40, 15% WR — no edge on gold
     zscore_lookback: 20
     entry_threshold: 2.0
     exit_threshold: 0.5
@@ -167,7 +167,7 @@ strategies:
     mtf_confirmation: false
 
   vwap:
-    enabled: true               # DISABLED: -1.2%, PF 0.77 — mean reversion doesn't work on trending gold
+    enabled: false              # -0.98%, PF 0.77 — loses money on trending gold
     timeframe: 1m
     band_std_mult: 2.0
     partial_std_mult: 0.5
@@ -267,14 +267,14 @@ trading_hours:
       strategies: [kalman_regime, mini_medallion]
 
     # ── LONDON OPEN ───────────────────────────────────────────────────────────
-    # Highest volatility. All enabled strategies fire.
+    # Highest volatility. All 4 enabled strategies fire.
     # Times UTC | IST: 12:30-15:00
     - name: london_open
       start: "07:00"             # 12:30 IST
       end: "09:30"               # 15:00 IST
       enabled: true
       lot_size_multiplier: 1.0
-      strategies: [momentum, kalman_regime, mini_medallion]
+      strategies: [momentum, kalman_regime, breakout, mini_medallion]
 
     # ── LONDON CONTINUATION / NY PRE-MARKET ───────────────────────────────────
     # London still active, NY traders positioning. Strong momentum continuations.
@@ -284,7 +284,7 @@ trading_hours:
       end: "12:00"               # 17:30 IST
       enabled: true
       lot_size_multiplier: 1.0
-      strategies: [momentum, kalman_regime, mini_medallion]
+      strategies: [momentum, kalman_regime, breakout, mini_medallion]
 
     # ── NY OPEN / LONDON-NY OVERLAP ───────────────────────────────────────────
     # NY + London both active → highest combined liquidity.
@@ -294,7 +294,7 @@ trading_hours:
       end: "14:30"               # 20:00 IST
       enabled: true
       lot_size_multiplier: 1.0
-      strategies: [momentum, kalman_regime, mini_medallion]
+      strategies: [momentum, kalman_regime, breakout, mini_medallion]
 
     # ── NY EVENING / LATE SESSION ─────────────────────────────────────────────
     # Post-NYSE. Lower volume. Reduced size, skip momentum (needs vol).
