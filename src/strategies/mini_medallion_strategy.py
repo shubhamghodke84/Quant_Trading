@@ -81,7 +81,7 @@ class MiniMedallionStrategy(BaseStrategy):
             'vwap_reversion': self._signal_vwap_reversion(bars, vwap, current_atr),
             'order_flow': self._signal_order_flow(vol_delta),
             'liquidity_sweep': self._signal_liquidity_sweep(bars),
-            'lead_lag': self._signal_lead_lag(bars), # Mocked without cross-asset data
+            'lead_lag': self._signal_lead_lag(bars),
             'market_regime': self._signal_market_regime(bars, adx),
             'session_volatility': self._signal_session_volatility(bars, current_atr),
             'volatility_spike': self._signal_volatility_spike(bars, atr)
