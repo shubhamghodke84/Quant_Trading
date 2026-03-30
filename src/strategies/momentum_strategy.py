@@ -267,7 +267,11 @@ class MomentumStrategy(BaseStrategy):
             )
 
         # ── Bearish momentum confluence ──────────────────────────────────────
-        ema_stack_bearish = (current_ema_fast < current_ema_mid < current_ema_slow)
+        # Relaxed from full 3-EMA stack (EMA9 < EMA21 < EMA50) which almost never
+        # triggers on trending gold (1 SELL in 1309 trades). Now only requires
+        # EMA9 < EMA21 — confirms short-term downtrend without needing a full
+        # long-term trend reversal.
+        ema_stack_bearish = (current_ema_fast < current_ema_mid)
         rsi_bearish = current_rsi < self.rsi_bear_threshold
         rsi_not_oversold = current_rsi > self.rsi_oversold
         rsi_falling = current_rsi_slope < 0
