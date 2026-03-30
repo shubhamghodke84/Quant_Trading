@@ -71,6 +71,12 @@ class KalmanRegimeStrategy(BaseStrategy):
         # Minimum signal strength to emit a signal
         self.min_signal_strength = config.get('min_signal_strength', 0.50)
 
+        # Trade cooldown: minimum bars between signals to prevent overtrading.
+        # 32k trades on 81k bars = trading every other bar. Cooldown of 60 bars
+        # (5 hours on 5m) brings this to a reasonable ~200-400 trades.
+        self.cooldown_bars = config.get('cooldown_bars', 60)
+        self._bars_since_signal = self.cooldown_bars  # Allow first trade immediately
+
         # News filter (optional)
         self.news_filter_enabled = config.get('news_filter', False)
         self._news_events = None
@@ -92,6 +98,12 @@ class KalmanRegimeStrategy(BaseStrategy):
 
         close = bars['close']
         current_close = float(close.iloc[-1])
+
+        # ── 0. Cooldown check ──────────────────────────────────────────────
+        self._bars_since_signal += 1
+        if self._bars_since_signal < self.cooldown_bars:
+            self._log_no_signal(f"Cooldown: {self._bars_since_signal}/{self.cooldown_bars} bars")
+            return None
 
         # ── 1. Kalman filter trend ──────────────────────────────────────────
         kalman = Indicators.kalman_filter(close, q=self.kalman_q, r=self.kalman_r)
@@ -210,6 +222,7 @@ class KalmanRegimeStrategy(BaseStrategy):
 
         # ── 7. Delegation ───────────────────────────────────────────────────
         # SL/TP is managed by RiskProcessor based on metadata parameters
+        self._bars_since_signal = 0  # Reset cooldown
 
         return self._create_signal(
             side=side,
