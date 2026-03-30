@@ -142,7 +142,7 @@ strategies:
     hurst_range_threshold: 0.45
 
   breakout:
-    enabled: true               # DISABLED: +0.83% but 11.5% DD exceeds prop firm limit
+    enabled: true
     timeframe: 5m
     donchian_period: 20
     rr_ratio: 2.0
@@ -154,6 +154,7 @@ strategies:
     rsi_overbought: 75
     rsi_oversold: 25
     atr_spike_mult: 1.5
+    cooldown_bars: 8               # New: breaks consecutive loss streaks (was 23 max)
 
   mean_reversion:
     enabled: true               # DISABLED: -1.6%, 15% WR — no edge on trending gold
@@ -181,7 +182,8 @@ strategies:
     only_in_regime: RANGE
 
   # ── PRIMARY STRATEGY ──────────────────────────────────────────────────────
-  # Momentum: +4.9%, PF 1.10, 4.85% DD — best risk-adjusted returns
+  # Momentum: +4.04%, PF 1.10, DD 3.93% — best risk-adjusted returns
+  # Sell-side relaxed: EMA stack now EMA9 < EMA21 (dropped EMA50 req for shorts)
   momentum:
     enabled: true
     timeframe: 5m
@@ -189,12 +191,12 @@ strategies:
     ema_period: 20
     rr_ratio: 2.5             # $40 risk × 2.5 = $100 target
     atr_stop_multiplier: 1.5
-    rsi_bull_threshold: 50
-    rsi_bear_threshold: 50
-    rsi_overbought: 80
-    rsi_oversold: 20
-    adx_min_threshold: 20        # Relaxed from 25 — 5m needs lower bar
-    volume_confirmation: false   # MT5 tick volume unreliable on 5m
+    rsi_bull_threshold: 52       # Raised from 50 — require stronger bull confirmation
+    rsi_bear_threshold: 48       # Raised from 50 — require stronger bear confirmation
+    rsi_overbought: 78           # Tightened from 80 — earlier exit signal
+    rsi_oversold: 22             # Tightened from 20 — earlier exit signal
+    adx_min_threshold: 20
+    volume_confirmation: false
     macd_fast: 12
     macd_slow: 26
     macd_signal: 9
@@ -202,11 +204,13 @@ strategies:
     ema_mid: 21
     ema_slow: 30
     rsi_slope_bars: 3
-    min_signal_strength: 0.55   # Relaxed from 0.70
+    min_signal_strength: 0.50   # Relaxed from 0.55 — allows more trades now that sell-side is unlocked
+    min_signal_strength_sell: 0.60  # Higher bar for shorts (gold upward bias)
     only_in_regime: TREND
 
   # ── SECONDARY STRATEGY ────────────────────────────────────────────────────
-  # Kalman: +10.1%, PF 1.08, 7.4% DD — strongest returns, tighter cooldown for DD safety
+  # Kalman: +11.95%, PF 1.15, DD 3.38% — best overall strategy
+  # Minimal changes — don't fix what isn't broken
   kalman_regime:
     enabled: true
     timeframe: 15m
@@ -219,21 +223,21 @@ strategies:
     trend_adx_min: 22
     kalman_confirm_bars: 2
     min_signal_strength: 0.75
-    cooldown_bars: 30             # Tightened to push DD below 7%
+    cooldown_bars: 30
     atr_period: 14
     sl_atr_multiplier: 1.5
     tp_atr_multiplier: 5.0
     news_filter: true
 
   # ── TERTIARY STRATEGY ─────────────────────────────────────────────────────
-  # Mini Medallion: +0.82%, PF 1.03, 2.9% DD — low DD diversifier
+  # Mini Medallion: +0.89%, PF 1.04, DD 2.62% — low DD diversifier
   mini_medallion:
     enabled: true
     timeframe: 1m
-    score_threshold: 5.0          # Raised from 4.0 — require stronger signal agreement
+    score_threshold: 5.0
     cooldown_bars: 30
-    risk_atr_multiplier: 1.5     # Widened from 1.0 — give trades room
-    rr_ratio: 2.0                # Raised from 1.5 — better risk/reward
+    risk_atr_multiplier: 1.5
+    rr_ratio: 2.0
     weights:
       mean_reversion: 1.0
       momentum_burst: 0.8
