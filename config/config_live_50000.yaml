@@ -14,7 +14,7 @@
 environment: live
 
 account:
-  initial_balance: 50000.0
+  initial_balance: 49660.28
   currency: USD
   leverage: 100  # Default (FX). Symbol-specific leverage handled below.
 
