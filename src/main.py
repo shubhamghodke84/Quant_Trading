@@ -347,7 +347,32 @@ class TradingSystem:
             try:
                 self.loop_iteration += 1
                 
-                # 1. Check kill switch
+                # 0. Auto-reset stale kill switch from a previous day
+                # The kill switch persists across restarts. If it was triggered
+                # yesterday (or earlier), clear it so the new trading day starts
+                # fresh. Same-day kill switches still halt immediately.
+                if self.risk_engine.kill_switch.is_active():
+                    ks_status = self.risk_engine.kill_switch.get_status()
+                    triggered_at = ks_status.get('triggered_at')
+                    if triggered_at:
+                        from datetime import date as _date_type
+                        ks_date = datetime.fromisoformat(triggered_at).date()
+                        today = datetime.now(timezone.utc).date()
+                        if ks_date < today:
+                            self.logger.info(
+                                f"Kill switch from {ks_date} auto-reset for new trading day"
+                            )
+                            self.risk_engine.kill_switch.reset()
+                            # Reset daily metrics with current equity
+                            try:
+                                account_info = self._get_effective_account_info()
+                                self.risk_engine.reset_daily_metrics(account_info['equity'])
+                                self.risk_engine.update_equity_hwm(account_info['equity'])
+                                self.risk_engine.consecutive_losses = 0
+                            except Exception as _e:
+                                self.logger.warning(f"Daily reset after kill switch clear failed: {_e}")
+
+                # 1. Check kill switch (same-day triggers still halt)
                 if self.risk_engine.kill_switch.is_active():
                     self.logger.critical("Kill switch active - halting trading")
                     break

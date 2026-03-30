@@ -1,61 +1,61 @@
 {
-  "generated_at": "2026-03-27T09:36:41.956519+00:00",
-  "valid_until": "2026-03-28T09:36:41.956519+00:00",
+  "generated_at": "2026-03-30T06:39:09.386031+00:00",
+  "valid_until": "2026-03-31T06:39:09.386031+00:00",
   "regime": "RANGE",
-  "confidence": 0.7744,
-  "classifier": "RandomForest+Markov (n=40 samples)",
+  "confidence": 0.9048,
+  "classifier": "RandomForest+Markov (n=278 samples)",
   "strategy_overrides": {
-    "breakout": false,
-    "momentum": false,
+    "breakout": true,
+    "momentum": true,
     "kalman_regime": true,
     "mean_reversion": false,
-    "vwap": true,
+    "vwap": false,
     "mini_medallion": true
   },
   "diagnostics": {
-    "adx_14": 40.174056,
-    "atr_pct": 0.067259,
-    "bb_width_ratio": 5.292417,
-    "close_ema20_pct": 0.656425,
-    "momentum_1d": 0.014385,
-    "momentum_5d": 1.095813,
-    "range_atr_ratio": 0.375398,
-    "vol_ratio": 0.138495,
-    "park_vol_zscore": 0.945879
+    "adx_14": 31.803364,
+    "atr_pct": 0.038234,
+    "bb_width_ratio": 1.758394,
+    "close_ema20_pct": -0.035117,
+    "momentum_1d": 0.017803,
+    "momentum_5d": 0.018269,
+    "range_atr_ratio": 0.683048,
+    "vol_ratio": 0.072767,
+    "park_vol_zscore": -0.294497
   },
   "strategy_weights": {
-    "breakout": 0.15,
-    "momentum": 0.2,
-    "kalman_regime": 0.6,
-    "mean_reversion": 0.15,
-    "vwap": 0.85,
-    "mini_medallion": 0.55
+    "breakout": 0.6,
+    "momentum": 0.55,
+    "kalman_regime": 0.75,
+    "mean_reversion": 0.0,
+    "vwap": 0.0,
+    "mini_medallion": 0.6
   },
   "performance_scores": {
-    "kalman_regime": -0.0795,
+    "kalman_regime": -0.16,
     "mini_medallion": -0.1738,
-    "vwap_deviation": -0.1375
+    "vwap_deviation": -0.3102
   },
   "regime_probabilities": {
-    "TREND": 0.2185,
-    "RANGE": 0.7744,
-    "VOLATILE": 0.0071
+    "TREND": 0.0865,
+    "RANGE": 0.9048,
+    "VOLATILE": 0.0087
   },
   "transition_matrix": {
     "TREND": {
-      "TREND": 0.25,
-      "RANGE": 0.5,
-      "VOLATILE": 0.25
+      "TREND": 0.1613,
+      "RANGE": 0.7097,
+      "VOLATILE": 0.129
     },
     "RANGE": {
-      "TREND": 0.0476,
-      "RANGE": 0.9286,
-      "VOLATILE": 0.0238
+      "TREND": 0.1004,
+      "RANGE": 0.8916,
+      "VOLATILE": 0.008
     },
     "VOLATILE": {
-      "TREND": 0.3333,
-      "RANGE": 0.3333,
-      "VOLATILE": 0.3333
+      "TREND": 0.1429,
+      "RANGE": 0.7143,
+      "VOLATILE": 0.1429
     }
   }
 }
