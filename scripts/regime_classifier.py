@@ -428,22 +428,23 @@ def classify_ml(
     y_enc = le.fit_transform(y)
 
     base_clf = RandomForestClassifier(
-        n_estimators=300,
+        n_estimators=100,           # 100 trees is plenty for ~300 rows × 9 features
         max_depth=5,
         min_samples_leaf=5,
         max_features="sqrt",
         random_state=42,
         class_weight="balanced",
+        n_jobs=-1,                  # Use all CPU cores for parallel tree fitting
     )
 
     # Calibrate probabilities so confidence=0.67 actually means 67% accuracy,
-    # not the raw overconfident RF estimate. Use 'isotonic' for n>50, else 'sigmoid'.
+    # not the raw overconfident RF estimate. Use 'sigmoid' (fast Platt scaling)
+    # instead of 'isotonic' (needs more data and is slower).
     import numpy as np
     min_class_count = int(np.bincount(y_enc).min())
-    method = "isotonic" if len(X) >= 60 else "sigmoid"
-    cv_folds = min(3, min_class_count)
+    cv_folds = min(2, min_class_count)
     if cv_folds >= 2:
-        clf = CalibratedClassifierCV(base_clf, cv=cv_folds, method=method)
+        clf = CalibratedClassifierCV(base_clf, cv=cv_folds, method="sigmoid")
         clf.fit(X, y_enc)
     else:
         # Insufficient per-class samples for calibration — use base RF directly
