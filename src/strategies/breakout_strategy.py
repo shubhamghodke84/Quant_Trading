@@ -59,6 +59,11 @@ class BreakoutStrategy(BaseStrategy):
         self.volume_confirmation = config.get('volume_confirmation', False)
         self.volume_ratio_min = config.get('volume_ratio_min', 1.2)
 
+        # Trade cooldown: minimum bars between signals to prevent overtrading.
+        # Backtest showed 23 max consecutive losses — cooldown breaks losing streaks.
+        self.cooldown_bars = config.get('cooldown_bars', 12)
+        self._bars_since_signal = self.cooldown_bars  # Allow first trade immediately
+
         self.last_breakout_bar = None
 
     def get_name(self) -> str:
@@ -71,6 +76,12 @@ class BreakoutStrategy(BaseStrategy):
         min_bars = self.donchian_period + self.atr_ma_period + 5
         if len(bars) < min_bars:
             self._log_no_signal("Insufficient data")
+            return None
+
+        # Cooldown check — prevent consecutive loss streaks
+        self._bars_since_signal += 1
+        if self._bars_since_signal < self.cooldown_bars:
+            self._log_no_signal(f"Cooldown: {self._bars_since_signal}/{self.cooldown_bars} bars")
             return None
 
         # No separate regime filter — ADX > threshold inside the signal logic
@@ -156,6 +167,8 @@ class BreakoutStrategy(BaseStrategy):
             adx_norm = min((float(current_adx) - self.adx_min_threshold) / 50.0, 1.0)
             strength = min(0.55 + adx_norm * 0.35, 1.0)
 
+            self._bars_since_signal = 0  # Reset cooldown
+
             return self._create_signal(
                 side=OrderSide.BUY,
                 strength=strength,
@@ -194,6 +207,8 @@ class BreakoutStrategy(BaseStrategy):
 
             adx_norm = min((float(current_adx) - self.adx_min_threshold) / 50.0, 1.0)
             strength = min(0.55 + adx_norm * 0.35, 1.0)
+
+            self._bars_since_signal = 0  # Reset cooldown
 
             return self._create_signal(
                 side=OrderSide.SELL,
