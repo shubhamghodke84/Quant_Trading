@@ -1,6 +1,6 @@
 {
-  "generated_at": "2026-04-01T05:04:41.095232+00:00",
-  "valid_until": "2026-04-02T05:04:41.095232+00:00",
+  "generated_at": "2026-04-01T08:57:01.681968+00:00",
+  "valid_until": "2026-04-02T08:57:01.681968+00:00",
   "regime": "RANGE",
   "confidence": 0.9082,
   "classifier": "RandomForest+Markov (n=279 samples)",
@@ -33,7 +33,7 @@
   },
   "performance_scores": {
     "kalman_regime": -0.16,
-    "mini_medallion": -0.2038,
+    "mini_medallion": -0.2203,
     "vwap_deviation": -0.3102
   },
   "regime_probabilities": {
