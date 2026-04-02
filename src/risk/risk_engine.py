@@ -86,6 +86,14 @@ class RiskEngine:
         self.absolute_max_loss_usd = Decimal(str(risk_config.get('absolute_max_loss_usd', 0)))
         self.max_daily_profit_usd = Decimal(str(risk_config.get('max_daily_profit_usd', 0)))
         self.initial_balance = Decimal(str(config.get('account', {}).get('initial_balance', 0)))
+
+        # Pre-trade daily loss budget: reject orders whose worst-case SL hit
+        # would push the combined daily loss past a safety margin.
+        # Default 85% = halt at $250.75 when absolute limit is $295, giving
+        # a $44.25 buffer for slippage and concurrent fills.
+        self.daily_loss_budget_safety_pct = Decimal(
+            str(risk_config.get('daily_loss_budget_safety_pct', 0.85))
+        )
         
         # State tracking
         self.daily_start_equity = Decimal("0")
@@ -181,6 +189,38 @@ class RiskEngine:
                         limit=float(self.absolute_max_loss_usd),
                         pct_used=float(daily_dollar_loss / self.absolute_max_loss_usd * 100)
                     )
+
+            # CHECK 3c: Pre-trade daily loss BUDGET (proactive, not reactive)
+            # The reactive check above fires AFTER the breach — too late for GFT.
+            # This proactive check estimates: "if this trade hits SL, will we breach?"
+            # and rejects BEFORE the damage is done.
+            if (self.absolute_max_loss_usd > 0
+                    and self.daily_start_equity > 0
+                    and order.price and order.stop_loss and order.symbol):
+                daily_dollar_loss = self.daily_start_equity - account_equity
+                # Worst-case loss from this specific trade hitting its stop loss
+                sl_distance = abs(order.price - order.stop_loss)
+                worst_case_trade_loss = (
+                    sl_distance * order.quantity * order.symbol.value_per_lot
+                )
+                projected_daily_loss = daily_dollar_loss + worst_case_trade_loss
+                budget_limit = self.absolute_max_loss_usd * self.daily_loss_budget_safety_pct
+
+                if projected_daily_loss >= budget_limit:
+                    reason = (
+                        f"DAILY LOSS BUDGET EXHAUSTED: current loss ${daily_dollar_loss:.2f} "
+                        f"+ worst-case ${worst_case_trade_loss:.2f} = ${projected_daily_loss:.2f} "
+                        f">= budget ${budget_limit:.2f} (85% of ${self.absolute_max_loss_usd})"
+                    )
+                    self.logger.warning(
+                        "Order rejected — pre-trade daily loss budget exceeded",
+                        daily_loss_so_far=float(daily_dollar_loss),
+                        worst_case_trade=float(worst_case_trade_loss),
+                        projected_total=float(projected_daily_loss),
+                        budget_limit=float(budget_limit),
+                        order_id=str(order.order_id)
+                    )
+                    return False, reason
 
             # CHECK 4: Daily loss limit
             daily_loss = -daily_pnl if daily_pnl < 0 else Decimal("0")

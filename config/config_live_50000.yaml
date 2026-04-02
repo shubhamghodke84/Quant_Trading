@@ -94,6 +94,9 @@ risk:
   absolute_max_loss_usd: 295      # Daily loss limit — hard cap below $300
   max_drawdown_usd: 3500          # Overall drawdown limit ($50k × 7%)
   max_daily_profit_usd: 300       # Stop trading for the day once $300 profit hit
+  daily_loss_budget_safety_pct: 0.85  # Pre-trade budget gate: reject if worst-case SL hit
+                                      # would push daily loss past 85% of $295 = $250.75
+                                      # Gives $44 buffer for slippage / concurrent fills
 
   max_positions: 2
   max_daily_trades: 15                # Reduced from 50 — audit: 21 trades/day × $350 daily StdDev ≫ $295 limit
