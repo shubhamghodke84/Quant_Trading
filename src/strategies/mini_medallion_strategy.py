@@ -26,25 +26,26 @@ class MiniMedallionStrategy(BaseStrategy):
         super().__init__(symbol, config)
         
         self.timeframe = config.get('timeframe', '1m')
-        self.score_threshold = config.get('score_threshold', 3.0)
+        self.score_threshold = config.get('score_threshold', 3.5)
         self.fixed_lot = config.get('fixed_lot', None)
 
         # Trade cooldown: minimum bars between signals to prevent overtrading
         self.cooldown_bars = config.get('cooldown_bars', 30)
         self._bars_since_signal = self.cooldown_bars
         
-        # Signal Weights
+        # Signal Weights — cleaned up:
+        # - Removed lead_lag (always returns 0, dead code)
+        # - Removed vwap_reversion (duplicate of mean_reversion, both measure VWAP distance)
+        # - Merged session_volatility + volatility_spike into single volatility_regime signal
+        #   (old signals contradicted each other: one followed vol bars, other faded them)
         self.weights = config.get('weights', {
-            'mean_reversion': 1.0,
-            'momentum_burst': 0.8,
+            'mean_reversion': 1.2,
+            'momentum_burst': 1.0,
             'volatility_expansion': 1.2,
-            'vwap_reversion': 0.9,
             'order_flow': 1.1,
             'liquidity_sweep': 1.3,
-            'lead_lag': 0.7,
             'market_regime': 1.0,
-            'session_volatility': 0.6,
-            'volatility_spike': 0.8
+            'volatility_regime': 0.8
         })
 
     def get_name(self) -> str:
@@ -73,18 +74,15 @@ class MiniMedallionStrategy(BaseStrategy):
             
         current_price = float(bars['close'].iloc[-1])
 
-        # Compute signal scores (-1, 0, +1)
+        # Compute signal scores (-1, 0, +1) — 7 independent signals
         signals = {
             'mean_reversion': self._signal_mean_reversion(bars, vwap),
             'momentum_burst': self._signal_momentum_burst(bars),
             'volatility_expansion': self._signal_volatility_expansion(bars, bb_upper, bb_lower),
-            'vwap_reversion': self._signal_vwap_reversion(bars, vwap, current_atr),
             'order_flow': self._signal_order_flow(vol_delta),
             'liquidity_sweep': self._signal_liquidity_sweep(bars),
-            'lead_lag': self._signal_lead_lag(bars),
             'market_regime': self._signal_market_regime(bars, adx),
-            'session_volatility': self._signal_session_volatility(bars, current_atr),
-            'volatility_spike': self._signal_volatility_spike(bars, atr)
+            'volatility_regime': self._signal_volatility_regime(bars, atr, current_atr)
         }
 
         # Calculate aggregate alpha score
@@ -190,17 +188,6 @@ class MiniMedallionStrategy(BaseStrategy):
                 return -1
         return 0
 
-    def _signal_vwap_reversion(self, bars: pd.DataFrame, vwap: pd.Series, current_atr: float) -> int:
-        """Signal 4: Institutional mean-reversion based on absolute distance to VWAP."""
-        distance = bars['close'].iloc[-1] - vwap.iloc[-1]
-        
-        # Large deviation = >= 2x ATR
-        if distance > 2 * current_atr:
-            return -1 # Large positive deviation -> Short
-        elif distance < -2 * current_atr:
-            return 1  # Large negative deviation -> Long
-        return 0
-
     def _signal_order_flow(self, vol_delta: pd.Series) -> int:
         """Signal 5: Order flow imbalance proxy (using Delta)."""
         # We look at moving average of recent vol delta
@@ -242,40 +229,33 @@ class MiniMedallionStrategy(BaseStrategy):
             
         return 0
 
-    def _signal_lead_lag(self, bars: pd.DataFrame) -> int:
-        """Signal 7: BTC -> Gold lead-lag. (MOCKED)"""
-        # Since we don't have cross-asset routing built into on_bar easily right now,
-        # we return neutral (0). Adding it requires multi-symbol fetching in the strategy loop.
-        return 0
-
     def _signal_market_regime(self, bars: pd.DataFrame, adx: pd.Series) -> int:
-        """Signal 8: Market regime. Provides trend-following directional leaning."""
+        """Market regime. Provides trend-following directional leaning."""
         current_adx = adx.iloc[-1]
         close = bars['close']
-        
-        if current_adx > 25: # Trend regime
-            # Lean in direction of SMA(20)
+
+        if current_adx > 25:  # Trend regime
             sma20 = close.rolling(20).mean().iloc[-1]
             return 1 if close.iloc[-1] > sma20 else -1
-        return 0 # Neutral in range
+        return 0  # Neutral in range
 
-    def _signal_session_volatility(self, bars: pd.DataFrame, current_atr: float) -> int:
-        """Signal 9: Boost breakouts during high session volatility."""
-        # Check if current ATR is > 1.2x of the 100-period ATR
+    def _signal_volatility_regime(self, bars: pd.DataFrame, atr: pd.Series, current_atr: float) -> int:
+        """Volatility regime signal — replaces old contradictory session_volatility + volatility_spike.
+
+        Logic: If vol is elevated but NOT spiking, follow the trend (momentum).
+        If vol is spiking (>50% jump in 3 bars), fade the move (exhaustion).
+        If vol is normal, stay neutral.
+        """
         long_atr = Indicators.atr(bars, period=100).iloc[-1]
         if pd.isna(long_atr) or long_atr == 0:
             return 0
-            
-        if current_atr > 1.2 * long_atr:
-            # We use this as a strong momentum confirmation in the direction of the latest bar
-            return 1 if bars['close'].iloc[-1] > bars['open'].iloc[-1] else -1
-        return 0
 
-    def _signal_volatility_spike(self, bars: pd.DataFrame, atr: pd.Series) -> int:
-        """Signal 10: Exhaustion move fading based on ATR spike."""
-        atr_roc = (atr.iloc[-1] - atr.iloc[-3]) / atr.iloc[-3]
-        
-        if atr_roc > 0.5: # 50% jump in 3 periods (massive spike)
-            # Fade the current bar direction
+        atr_roc = (atr.iloc[-1] - atr.iloc[-3]) / atr.iloc[-3] if atr.iloc[-3] != 0 else 0
+
+        if atr_roc > 0.5:
+            # Massive spike = exhaustion — fade current bar
             return -1 if bars['close'].iloc[-1] > bars['open'].iloc[-1] else 1
+        elif current_atr > 1.2 * long_atr:
+            # Elevated but not spiking — follow momentum
+            return 1 if bars['close'].iloc[-1] > bars['open'].iloc[-1] else -1
         return 0
