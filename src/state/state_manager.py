@@ -63,6 +63,9 @@ class StateManager:
         
         # Current state file
         self.current_state_file = self.state_dir / "system_state.json"
+
+        # Change-detection: only log at INFO when state actually changes (Prime rule)
+        self._last_logged_snapshot: Optional[tuple] = None
         
         # Logging
         from ..monitoring.logger import get_logger
@@ -94,13 +97,28 @@ class StateManager:
             success = self.store.save(state_dict)
             
             if success:
-                self.logger.info(
-                    "State saved successfully",
-                    positions=len(state.positions),
-                    orders=len(state.open_orders),
-                    balance=float(state.account_balance),
-                    equity=float(state.account_equity)
+                # Log-on-change: only emit INFO when state snapshot differs
+                current_snapshot = (
+                    len(state.positions),
+                    len(state.open_orders),
+                    round(float(state.account_balance), 2),
+                    round(float(state.account_equity), 0),
                 )
+                if current_snapshot != self._last_logged_snapshot:
+                    self.logger.info(
+                        "State saved successfully",
+                        positions=current_snapshot[0],
+                        orders=current_snapshot[1],
+                        balance=current_snapshot[2],
+                        equity=current_snapshot[3],
+                    )
+                    self._last_logged_snapshot = current_snapshot
+                else:
+                    self.logger.debug(
+                        "State saved (unchanged)",
+                        positions=current_snapshot[0],
+                        orders=current_snapshot[1],
+                    )
             else:
                 self.logger.error("Failed to save state")
             

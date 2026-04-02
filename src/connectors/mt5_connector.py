@@ -149,8 +149,8 @@ class MT5Connector:
                 'margin_level': Decimal(str(response.get('margin_level', 0)))
             }
             
-            logger.info("Account info retrieved: balance=%s, equity=%s", 
-                       account_info['balance'], account_info['equity'])
+            logger.debug("Account info retrieved: balance=%s, equity=%s", 
+                        account_info['balance'], account_info['equity'])
             return account_info
             
         except Exception as e:
@@ -182,7 +182,7 @@ class MT5Connector:
                            position.symbol.ticker, position.side.value,
                            position.entry_price, ticket_str, position.unrealized_pnl)
             
-            logger.info("Retrieved %d positions from MT5", len(positions))
+            logger.debug("Retrieved %d positions from MT5", len(positions))
             return positions
             
         except Exception as e:
@@ -377,7 +377,7 @@ class MT5Connector:
                 return []
             
             deals = response.get("deals", [])
-            logger.info("Retrieved %d historical deals", len(deals))
+            logger.debug("Retrieved %d historical deals", len(deals))
             return deals
             
         except Exception as e:
