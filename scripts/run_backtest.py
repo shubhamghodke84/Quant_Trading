@@ -68,6 +68,7 @@ def create_symbol(symbol_name: str, config: dict) -> Symbol:
         lot_step=Decimal(str(symbol_config.get('lot_step', 0.01))),
         value_per_lot=Decimal(str(symbol_config.get('value_per_lot', 1))),
         min_stops_distance=Decimal(str(symbol_config.get('min_stops_distance', 0))),
+        leverage=Decimal(str(symbol_config.get('leverage', 1))),
     )
 
 
