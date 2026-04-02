@@ -115,10 +115,10 @@ risk:
 
   trailing_stop:
     enabled: true
-    breakeven_atr_mult: 0.5        # Move SL to breakeven at +0.5× risk distance
-    lock_atr_mult: 1.5             # Move SL to partial lock at +1.5× risk distance
+    breakeven_atr_mult: 1.2        # Move SL to breakeven at +1.2× risk distance (was 0.5 — too tight, normal noise stopped out trades)
+    lock_atr_mult: 2.0             # Move SL to partial lock at +2.0× risk distance (was 1.5)
     lock_fraction: 0.5             # Lock in 50% of original risk at stage 2
-    time_stop_minutes: 45          # Close position if open for more than 45 minutes
+    # time_stop_minutes removed — was 45 min, killed 30-59% of trades before TP could be reached
     ml_exhaustion_factor: 0.8      # (ML ONLY) If exhaustion pipeline generates predicted pips, tight_lock 80% of it immediately when reached
 
 

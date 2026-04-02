@@ -174,11 +174,12 @@ class MomentumStrategy(BaseStrategy):
             self._log_no_signal("Indicator calculation failed")
             return None
 
-        # Inline regime classification using ADX + EMA alignment.
-        # The old RegimeFilter was too strict on 5m data (UNKNOWN 100%).
+        # Inline regime classification using ADX only.
+        # ADX measures trend *strength* regardless of direction — high ADX means
+        # strong trend (up OR down), which is what momentum needs for both BUY and SELL.
         if self.ml_regime is not None:
             regime = self.ml_regime
-        elif current_adx >= self.adx_min_threshold and (current_ema_fast > current_ema_mid):
+        elif current_adx >= self.adx_min_threshold:
             regime = MarketRegime.TREND
         else:
             regime = MarketRegime.RANGE
