@@ -133,7 +133,7 @@ strategies:
     hurst_range_threshold: 0.45
 
   breakout:
-    enabled: true                # Matching 50K config
+    enabled: false               # Disabled — 29.83% DD is too risky for $5K prop firm
     timeframe: 5m
     donchian_period: 20
     rr_ratio: 2.0
@@ -145,7 +145,7 @@ strategies:
     rsi_overbought: 75
     rsi_oversold: 25
     atr_spike_mult: 1.5
-    cooldown_bars: 8               # Breaks consecutive loss streaks (from 50K config)
+    cooldown_bars: 8
 
   mean_reversion:
     enabled: false              # -1.63%, PF 0.40, 15% WR — no edge on gold
@@ -173,7 +173,7 @@ strategies:
     only_in_regime: RANGE
 
   # ── PRIMARY STRATEGY ──────────────────────────────────────────────────────
-  # Momentum: Matching 50K config params
+  # Momentum: Our tuned params (best risk-adjusted: +29.67%, PF 1.27, DD 8.75%)
   momentum:
     enabled: true
     timeframe: 5m
@@ -181,11 +181,11 @@ strategies:
     ema_period: 20
     rr_ratio: 2.5
     atr_stop_multiplier: 1.5
-    rsi_bull_threshold: 52       # From 50K config
-    rsi_bear_threshold: 48       # From 50K config
+    rsi_bull_threshold: 55       # Tuned — require clear bullish RSI
+    rsi_bear_threshold: 45       # Tuned — require clear bearish RSI
     rsi_overbought: 78
     rsi_oversold: 22
-    adx_min_threshold: 20        # From 50K config (was 25)
+    adx_min_threshold: 25        # Tuned — strong trend confirmation (50K's 20 overtraded)
     volume_confirmation: false
     macd_fast: 12
     macd_slow: 26
@@ -194,39 +194,38 @@ strategies:
     ema_mid: 21
     ema_slow: 30
     rsi_slope_bars: 3
-    min_signal_strength: 0.50    # From 50K config (was 0.65)
-    min_signal_strength_sell: 0.60  # From 50K config — higher bar for shorts
+    min_signal_strength: 0.65    # Tuned — fewer but higher quality signals (50K's 0.50 = 40% DD)
     only_in_regime: TREND
 
   # ── SECONDARY STRATEGY ────────────────────────────────────────────────────
-  # Kalman: Matching 50K config params (with long_only)
+  # Kalman: HYBRID — long_only from 50K + wider stops from our tuning
   kalman_regime:
     enabled: true
     timeframe: 15m
-    long_only: true                 # From 50K config — SELL side loses money on Gold
+    long_only: true                 # From 50K — SELL side lost -$1,539, BUY side +$2,545
     kalman_q: 0.00001
     kalman_r: 0.01
     rv_window: 20
     rv_ma_window: 100
     zscore_window: 20
     entry_threshold: 2.5
-    trend_adx_min: 22              # From 50K config (was 28)
-    kalman_confirm_bars: 2         # From 50K config (was 3)
-    min_signal_strength: 0.75      # From 50K config (was 0.60)
-    cooldown_bars: 30              # From 50K config (was 80)
+    trend_adx_min: 28              # Tuned — stronger trend confirmation
+    kalman_confirm_bars: 3         # Tuned — 3-bar confirmation
+    min_signal_strength: 0.60      # Tuned — moderate filter
+    cooldown_bars: 80              # Tuned — 1-2 trades/day max
     atr_period: 14
-    sl_atr_multiplier: 1.5        # From 50K config (was 2.5)
-    tp_atr_multiplier: 5.0        # From 50K config (was 4.0)
+    sl_atr_multiplier: 2.5         # Tuned — wide stops, let trend develop
+    tp_atr_multiplier: 4.0         # Tuned — achievable TP (50K's 5.0x rarely hit)
     news_filter: true
 
   # ── TERTIARY STRATEGY ─────────────────────────────────────────────────────
-  # Mini Medallion: DISABLED — matching 50K config (negative expectancy)
+  # Mini Medallion: DISABLED — negative expectancy confirmed on both 5K and 50K
   mini_medallion:
-    enabled: false                  # Disabled per 50K audit — straight capital drain
+    enabled: false
     timeframe: 1m
-    score_threshold: 5.0
-    cooldown_bars: 30
-    risk_atr_multiplier: 1.5
+    score_threshold: 4.0
+    cooldown_bars: 90
+    risk_atr_multiplier: 2.0
     rr_ratio: 2.0
     weights:
       mean_reversion: 1.2
@@ -261,7 +260,7 @@ trading_hours:
       end: "09:30"               # 15:00 IST
       enabled: true
       lot_size_multiplier: 1.0
-      strategies: [momentum, kalman_regime, breakout]
+      strategies: [momentum, kalman_regime]
 
     # ── LONDON CONTINUATION / NY PRE-MARKET ───────────────────────────────────
     # London still active, NY traders positioning. Strong momentum continuations.
@@ -271,7 +270,7 @@ trading_hours:
       end: "12:00"               # 17:30 IST
       enabled: true
       lot_size_multiplier: 1.0
-      strategies: [momentum, kalman_regime, breakout]
+      strategies: [momentum, kalman_regime]
 
     # ── NY OPEN / LONDON-NY OVERLAP ───────────────────────────────────────────
     # NY + London both active → highest combined liquidity.
@@ -281,7 +280,7 @@ trading_hours:
       end: "14:30"               # 20:00 IST
       enabled: true
       lot_size_multiplier: 1.0
-      strategies: [momentum, kalman_regime, breakout]
+      strategies: [momentum, kalman_regime]
 
     # ── NY EVENING / LATE SESSION ─────────────────────────────────────────────
     # Post-NYSE. Lower volume. Reduced size, skip momentum (needs vol).
