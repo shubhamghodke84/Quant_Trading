@@ -154,14 +154,43 @@ class RiskProcessor:
             tp = entry + (sl_dist * Decimal('2.0')) if side == OrderSide.BUY else entry - (sl_dist * Decimal('2.0'))
 
         # Carmack Rule: Broker StopsValidator
-        if sl is not None:
+        # Validate BOTH SL and TP against broker minimum stops distance.
+        # Add a 5% buffer to avoid edge-case rejections where MT5 requires
+        # strictly greater than (not equal to) the minimum distance.
+        if sl is not None and tp is not None:
             min_stop_distance = getattr(signal.symbol, 'min_stops_distance', Decimal('0'))
-            actual_dist = abs(entry - sl)
-            if min_stop_distance > 0 and actual_dist < min_stop_distance:
-                self.logger.warning(
-                    f"RiskProcessor [Carmack]: SL distance {actual_dist} < broker min {min_stop_distance}. Expanding SL."
-                )
-                sl = entry - min_stop_distance if side == OrderSide.BUY else entry + min_stop_distance
+            if min_stop_distance > 0:
+                buffered_min = min_stop_distance * Decimal('1.05')
+
+                # Expand SL if too close to entry
+                sl_dist = abs(entry - sl)
+                if sl_dist < buffered_min:
+                    self.logger.warning(
+                        f"RiskProcessor [Carmack]: SL distance {sl_dist:.3f} < broker min "
+                        f"{min_stop_distance} (buffered={buffered_min:.3f}). Expanding SL."
+                    )
+                    sl = entry - buffered_min if side == OrderSide.BUY else entry + buffered_min
+
+                # Expand TP if too close to entry
+                tp_dist = abs(entry - tp)
+                if tp_dist < buffered_min:
+                    self.logger.warning(
+                        f"RiskProcessor [Carmack]: TP distance {tp_dist:.3f} < broker min "
+                        f"{min_stop_distance} (buffered={buffered_min:.3f}). Expanding TP."
+                    )
+                    tp = entry + buffered_min if side == OrderSide.BUY else entry - buffered_min
+
+                # Reject if R:R collapsed below 1.0 after expansion
+                final_risk = abs(entry - sl)
+                final_reward = abs(entry - tp)
+                if final_risk > 0 and (final_reward / final_risk) < Decimal('1.0'):
+                    self.logger.warning(
+                        f"RiskProcessor [Carmack]: R:R ratio {float(final_reward / final_risk):.2f} "
+                        f"< 1.0 after stop expansion — rejecting signal."
+                    )
+                    signal.stop_loss = None
+                    signal.take_profit = None
+                    return signal
 
         # Standardize TP/SL types to float as Signal model uses Optional[float] / Optional[Decimal]
         # Types.py accepts Decimal
@@ -170,3 +199,4 @@ class RiskProcessor:
 
         self.logger.debug(f"RiskProcessor calculated stops for {strategy_name}: SL={sl}, TP={tp}")
         return signal
+
