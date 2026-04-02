@@ -137,17 +137,6 @@ class MomentumStrategy(BaseStrategy):
         # Trim to 400 bars — enough to warm up all EMAs (O(N) indicator cost mitigation)
         bars = bars.tail(400)
 
-        # Inline regime classification using ADX + EMA alignment (higher timeframe
-        # aware). The old RegimeFilter was too strict on 5m data (UNKNOWN 100%).
-        # This uses the same indicators already computed to determine regime without
-        # an external filter.
-        if self.ml_regime is not None:
-            regime = self.ml_regime
-        elif current_adx >= self.adx_min_threshold and (current_ema_fast > current_ema_mid):
-            regime = MarketRegime.TREND
-        else:
-            regime = MarketRegime.RANGE
-
         # Calculate indicators
         rsi = Indicators.rsi(bars, period=self.rsi_period)
         ema = Indicators.ema(bars, period=self.ema_period)
@@ -184,6 +173,15 @@ class MomentumStrategy(BaseStrategy):
                          current_ema_mid, current_ema_slow, current_rsi_slope])):
             self._log_no_signal("Indicator calculation failed")
             return None
+
+        # Inline regime classification using ADX + EMA alignment.
+        # The old RegimeFilter was too strict on 5m data (UNKNOWN 100%).
+        if self.ml_regime is not None:
+            regime = self.ml_regime
+        elif current_adx >= self.adx_min_threshold and (current_ema_fast > current_ema_mid):
+            regime = MarketRegime.TREND
+        else:
+            regime = MarketRegime.RANGE
 
         # Regime gate: momentum only fires in TREND regime
         if regime != MarketRegime.TREND:

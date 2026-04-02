@@ -206,10 +206,10 @@ strategies:
     rv_ma_window: 100
     zscore_window: 20
     entry_threshold: 2.5
-    trend_adx_min: 25              # Raised from 22 — eliminate noisy borderline trends
-    kalman_confirm_bars: 3         # Raised from 2 — require 3 consecutive bars for confirmation
-    min_signal_strength: 0.55      # Lowered from 0.75 — was blocking too many valid trend signals
-    cooldown_bars: 45              # Raised from 30 — reduce overtrading
+    trend_adx_min: 22              # Keep at 22 — Kalman + slope gate already filter noisy signals
+    kalman_confirm_bars: 2         # Keep at 2 — already good noise rejection with slope gate
+    min_signal_strength: 0.40      # Lowered from 0.75 — Kalman distance/ATR ratio is often <0.5 on valid signals
+    cooldown_bars: 40              # Raised from 30 — moderate overtrading reduction
     atr_period: 14
     sl_atr_multiplier: 2.0         # Raised from 1.5 — give trades more room (was getting stopped out too easily)
     tp_atr_multiplier: 3.0         # Lowered from 5.0 — 5x ATR was unreachable, 3x is achievable
