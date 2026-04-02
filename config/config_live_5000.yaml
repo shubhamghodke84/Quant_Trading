@@ -206,13 +206,13 @@ strategies:
     rv_ma_window: 100
     zscore_window: 20
     entry_threshold: 2.5
-    trend_adx_min: 22              # Keep at 22 — Kalman + slope gate already filter noisy signals
-    kalman_confirm_bars: 2         # Keep at 2 — already good noise rejection with slope gate
-    min_signal_strength: 0.40      # Lowered from 0.75 — Kalman distance/ATR ratio is often <0.5 on valid signals
-    cooldown_bars: 40              # Raised from 30 — moderate overtrading reduction
+    trend_adx_min: 28              # Higher ADX = stronger trend confirmation, fewer false signals
+    kalman_confirm_bars: 3         # Require 3 consecutive bars on correct side of Kalman
+    min_signal_strength: 0.60      # Only take signals with meaningful Kalman separation
+    cooldown_bars: 80              # ~6.5 hours on 5m bars — only 1-2 trades per day max
     atr_period: 14
-    sl_atr_multiplier: 2.0         # Raised from 1.5 — give trades more room (was getting stopped out too easily)
-    tp_atr_multiplier: 3.0         # Lowered from 5.0 — 5x ATR was unreachable, 3x is achievable
+    sl_atr_multiplier: 2.5         # Wide stops — let the trend develop without noise
+    tp_atr_multiplier: 4.0         # 1.6:1 R:R — realistic for trend following
     news_filter: true
 
   # ── TERTIARY STRATEGY ─────────────────────────────────────────────────────
@@ -291,7 +291,7 @@ trading_hours:
 
   news_filter:
     enabled: true               # RESTRICTED: No trades ±5 min around high-impact news
-    csv_path: news/2026-04-01_news.csv
+    csv_path: news/2026-04-02_news.csv
     currency: USD
     impacts:
       - high

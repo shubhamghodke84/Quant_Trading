@@ -121,6 +121,7 @@ risk:
     time_stop_minutes: 45          # Close position if open for more than 45 minutes
     ml_exhaustion_factor: 0.8      # (ML ONLY) If exhaustion pipeline generates predicted pips, tight_lock 80% of it immediately when reached
 
+
   # Session windows: only trade London open (7-9am) and NY open (12-2pm UTC)
   # (enforced by trading_hours sessions below)
 
@@ -308,7 +309,7 @@ trading_hours:
 
   news_filter:
     enabled: true               # RESTRICTED: No trades ±5 min around high-impact news
-    csv_path: news/2026-04-01_news.csv
+    csv_path: news/2026-04-02_news.csv
     currency: USD
     impacts:
       - high
