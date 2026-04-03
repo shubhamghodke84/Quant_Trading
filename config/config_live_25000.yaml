@@ -1,57 +1,61 @@
 # Live Trading Environment Configuration
 # $25,000 Account Size
-# Rules: 3% daily loss ($750), 6% max trailing drawdown ($1500)
-# Risk per trade: $75 (0.30%) — 0.02 lot XAUUSD × 75 pip stop = $15
-# Target profit:  $187.50 per trade (RR 2.5)
+# Rules: 1.2% daily loss ($295), 7% max trailing drawdown ($1,750)
+# Risk per trade: $25 (0.10%) — 0.03 lot XAUUSD × 83 pip stop = $25
+# Target profit:  $62.50 per trade (RR 2.5)
 # News Trading: Restricted (±5 min around high-impact news)
 # Overnight & Weekend Holding: Allowed
+#
+# Audit-hardened config (Apr 2026):
+#   - Mini Medallion DISABLED (negative expectancy)
+#   - Kalman long_only (SELL side loses money on Gold)
+#   - Pre-trade daily loss budget gate (85%)
+#   - Tightened circuit breaker (3 losses / 30 min)
+#   - Full 3-strategy suite: Momentum + Kalman + Breakout
 
 environment: live
 
 account:
   initial_balance: 25000.0
   currency: USD
-  leverage: 100  # Default (FX). Symbol-specific leverage handled below.
+  leverage: 100
 
 symbols:
   XAUUSD:
     enabled: true
     pip_value: 0.01
-    min_lot: 0.02             # System minimum
-    max_lot: 0.05             # Increased to allow strategy overrides (up to 0.05)
+    min_lot: 0.03
+    max_lot: 0.03
     lot_step: 0.01
     value_per_lot: 100
     commission_per_lot: 0.0
-    leverage: 30              # Metals 1:30
-    min_stops_distance: 1.0   # 100 pips min distance for Gold
-    max_spread: 3.5           # 35 pips max spread threshold
-
+    leverage: 30
+    min_stops_distance: 1.0
+    max_spread: 3.5
 
   BTCUSD:
     enabled: false
     pip_value: 0.1
     min_lot: 0.01
-    max_lot: 0.01             # Lowered max limit for crypto margin safety
+    max_lot: 0.02
     lot_step: 0.01
     value_per_lot: 1
     commission_per_lot: 0.0
-    leverage: 2               # Crypto 1:2
-    min_stops_distance: 5.0   # $5.00 min distance for Bitcoin
-    max_spread: 15.0          # $15.00 max spread threshold
-
+    leverage: 2
+    min_stops_distance: 5.0
+    max_spread: 15.0
 
   EURUSD:
     enabled: false
     pip_value: 0.00001
     min_lot: 0.01
-    max_lot: 0.02
+    max_lot: 0.03
     lot_step: 0.01
     value_per_lot: 100000
     commission_per_lot: 0.0
-    leverage: 100             # FX 1:100
-    min_stops_distance: 0.00050 # 5 pip min distance
-    max_spread: 0.00030       # 3 pips max spread threshold
-
+    leverage: 100
+    min_stops_distance: 0.00050
+    max_spread: 0.00030
 
   US30:
     enabled: false
@@ -61,8 +65,8 @@ symbols:
     lot_step: 0.01
     value_per_lot: 1
     commission_per_lot: 0.0
-    leverage: 20              # Indices 1:20
-    max_spread: 5.0           # 5 points max spread threshold
+    leverage: 20
+    max_spread: 5.0
 
   USOIL:
     enabled: false
@@ -72,52 +76,55 @@ symbols:
     lot_step: 0.01
     value_per_lot: 1000
     commission_per_lot: 0.0
-    leverage: 10              # Energies 1:10
-    max_spread: 0.05          # 5 cents max spread threshold
+    leverage: 10
+    max_spread: 0.05
 
 risk:
   # $25,000 Account Risk Parameters
-  max_drawdown_pct: 0.07          # 7% Max Overall/Trailing Drawdown ($1750)
-  max_daily_loss_pct: 0.025       # 2.5% Max Daily Loss ($625)
-  bypass_drawdown_limit: true     # Bypass the drawdown killswitch permanently
+  max_drawdown_pct: 0.07          # 7% Max Overall/Trailing Drawdown ($1,750)
+  max_daily_loss_pct: 0.012       # 1.2% Max Daily Loss ($300)
+  bypass_drawdown_limit: false    # Enforce drawdown limit
 
-  # $75 risk per trade = 0.30% of $25,000
-  risk_per_trade_pct: 0.003       # 0.30% = $75 per trade
+  # $25 risk per trade = 0.10% of $25,000
+  # Basis: 0.03 lot XAUUSD × 83 pip stop × $10/pip/lot = $25
+  risk_per_trade_pct: 0.001       # 0.10% = $25 per trade
 
   # ABSOLUTE DOLLAR LOSS/PROFIT LIMITS
-  absolute_max_loss_usd: 725      # Daily loss limit ($25k × 3.0%)
-  max_drawdown_usd: 1475          # Overall drawdown limit ($1500)
-  max_daily_profit_usd: 1300      # Stop trading for the day once $1300 profit hit
+  absolute_max_loss_usd: 295      # Daily loss limit — hard cap below $300
+  max_drawdown_usd: 1475          # Overall drawdown limit ($1,750 with buffer)
+  max_daily_profit_usd: 250       # Stop trading for the day once $250 profit hit
+  daily_loss_budget_safety_pct: 0.85  # Pre-trade budget gate: reject if worst-case SL hit
+                                      # would push daily loss past 85% of $295 = $250.75
 
   max_positions: 2
-  max_daily_trades: 50
+  max_daily_trades: 15            # Conservative — matches 50K audit standard
   max_exposure_per_symbol_pct: 5.0
   max_daily_wins: 8               # Stop trading once 8 wins hit
 
   position_sizing:
-    method: dynamic_atr
+    method: fixed
+    fixed_lots:
+      XAUUSD: 0.03
+      EURUSD: 0.01
+      default: 0.01
   circuit_breaker:
     enabled: true
-    max_consecutive_losses: 5      # Kill switch (hard stop)
-    cooldown_minutes: 15
-    loss_pause_consecutive: 3      # Soft pause after 3 consecutive losses
-    loss_pause_minutes: 15         # Pause for 15 minutes then resume
+    max_consecutive_losses: 3      # Tightened — audit standard
+    cooldown_minutes: 30
+    loss_pause_consecutive: 2
+    loss_pause_minutes: 30
 
   trailing_stop:
     enabled: true
-    breakeven_atr_mult: 1.2        # Move SL to breakeven at +1.2× risk distance (was 0.5 — too tight, normal noise stopped out trades)
-    lock_atr_mult: 2.0             # Move SL to partial lock at +2.0× risk distance (was 1.5)
-    lock_fraction: 0.5             # Lock in 50% of original risk at stage 2
-    # time_stop_minutes removed — was 45 min, killed 30-59% of trades before TP could be reached
-    ml_exhaustion_factor: 0.8      # (ML ONLY) If exhaustion pipeline generates predicted pips, tight_lock 80% of it immediately when reached
-
-  # Session windows: only trade London open (7-9am) and NY open (12-2pm UTC)
-  # (enforced by trading_hours sessions below)
+    breakeven_atr_mult: 1.2
+    lock_atr_mult: 2.0
+    lock_fraction: 0.5
+    ml_exhaustion_factor: 0.8
 
 strategies:
   signal_cooldown_minutes: 5
   primary_timeframe: 1m
-  min_bars_required: 5              # Reduced from 10 so 5m strategies activate faster
+  min_bars_required: 5
 
   regime_filter:
     enabled: true
@@ -132,7 +139,7 @@ strategies:
     hurst_range_threshold: 0.45
 
   breakout:
-    enabled: false               # DISABLED: +0.83% but 11.5% DD exceeds 7% prop firm limit
+    enabled: true                # Enabled — $25K large enough for 3 strategies
     timeframe: 5m
     donchian_period: 20
     rr_ratio: 2.0
@@ -144,9 +151,10 @@ strategies:
     rsi_overbought: 75
     rsi_oversold: 25
     atr_spike_mult: 1.5
+    cooldown_bars: 8
 
   mean_reversion:
-    enabled: false               # DISABLED: -1.6%, 15% WR — no edge on trending gold
+    enabled: false
     zscore_lookback: 20
     entry_threshold: 2.0
     exit_threshold: 0.5
@@ -156,9 +164,10 @@ strategies:
     mtf_confirmation: false
 
   vwap:
-    enabled: false               # DISABLED: -1.2%, PF 0.77 — mean reversion doesn't work on trending gold
+    enabled: false
     timeframe: 1m
-    atr_multiplier: 1.5
+    band_std_mult: 2.0
+    partial_std_mult: 0.5
     stop_atr_multiplier: 1.5
     atr_period: 14
     min_volume_ratio: 1.0
@@ -170,7 +179,6 @@ strategies:
     only_in_regime: RANGE
 
   # ── PRIMARY STRATEGY ──────────────────────────────────────────────────────
-  # Momentum: +4.9%, PF 1.10, 4.85% DD — best risk-adjusted returns
   momentum:
     enabled: true
     timeframe: 5m
@@ -178,11 +186,11 @@ strategies:
     ema_period: 20
     rr_ratio: 2.5
     atr_stop_multiplier: 1.5
-    rsi_bull_threshold: 55            # Raised from 50 — require clearer bullish RSI
-    rsi_bear_threshold: 45            # Lowered from 50 — require clearer bearish RSI
-    rsi_overbought: 78                # Tightened from 80
-    rsi_oversold: 22                  # Tightened from 20
-    adx_min_threshold: 25             # Raised from 20 — stronger trend confirmation
+    rsi_bull_threshold: 52
+    rsi_bear_threshold: 48
+    rsi_overbought: 78
+    rsi_oversold: 22
+    adx_min_threshold: 22
     volume_confirmation: false
     macd_fast: 12
     macd_slow: 26
@@ -191,110 +199,109 @@ strategies:
     ema_mid: 21
     ema_slow: 30
     rsi_slope_bars: 3
-    min_signal_strength: 0.60         # Raised from 0.55 — fewer but higher quality signals
+    min_signal_strength: 0.55
+    min_signal_strength_sell: 0.60
     only_in_regime: TREND
 
   # ── SECONDARY STRATEGY ────────────────────────────────────────────────────
-  # Kalman: +10.1%, PF 1.08, 7.4% DD — strongest returns, tighter cooldown for DD safety
   kalman_regime:
     enabled: true
     timeframe: 15m
+    long_only: true                 # Audit: SELL side loses money on Gold
     kalman_q: 0.00001
     kalman_r: 0.01
     rv_window: 20
     rv_ma_window: 100
     zscore_window: 20
     entry_threshold: 2.5
-    trend_adx_min: 28              # Higher ADX = stronger trend confirmation, fewer false signals
-    kalman_confirm_bars: 3         # Require 3 consecutive bars on correct side of Kalman
-    min_signal_strength: 0.60      # Only take signals with meaningful Kalman separation
-    cooldown_bars: 80              # ~6.5 hours on 5m bars — 1-2 trades per day max
+    trend_adx_min: 22
+    kalman_confirm_bars: 2
+    min_signal_strength: 0.75
+    cooldown_bars: 40
     atr_period: 14
-    sl_atr_multiplier: 2.5         # Wide stops — let the trend develop without noise
-    tp_atr_multiplier: 4.0         # 1.6:1 R:R — realistic for trend following
+    sl_atr_multiplier: 1.5
+    tp_atr_multiplier: 5.0
     news_filter: true
 
-  # ── TERTIARY STRATEGY ─────────────────────────────────────────────────────
-  # Mini Medallion: +0.82%, PF 1.03, 2.9% DD — low DD diversifier
+  # ── DISABLED ───────────────────────────────────────────────────────────────
   mini_medallion:
-    enabled: true
+    enabled: false                  # Disabled — negative expectancy confirmed
     timeframe: 1m
-    score_threshold: 4.0           # Require strong consensus from 7 signals (~60% agreement)
-    cooldown_bars: 90              # ~1.5 hours on 1m bars — much less overtrading
-    risk_atr_multiplier: 2.0       # Wider stops to give trades room (was 1.5)
+    score_threshold: 5.0
+    cooldown_bars: 30
+    risk_atr_multiplier: 1.5
     rr_ratio: 2.0
     weights:
-      mean_reversion: 1.2          # Increased — primary edge signal
-      momentum_burst: 1.0          # Increased from 0.8
+      mean_reversion: 1.0
+      momentum_burst: 0.8
       volatility_expansion: 1.2
+      vwap_reversion: 0.9
       order_flow: 1.1
       liquidity_sweep: 1.3
+      lead_lag: 0.7
       market_regime: 1.0
-      volatility_regime: 0.8       # Merged session_volatility + volatility_spike
+      session_volatility: 0.6
+      volatility_spike: 0.8
 
 trading_hours:
-  # Friday cutoff disabled for 24/7 crypto/weekend trading
-  # friday_cutoff_utc: "19:00"
-
   sessions:
     # ── ASIAN SESSION ─────────────────────────────────────────────────────────
     - name: asian
-      start: "01:30"             # 07:00 IST
-      end: "06:00"               # 11:30 IST
+      start: "01:30"
+      end: "06:00"
       enabled: true
       lot_size_multiplier: 0.5
-      strategies: [kalman_regime, mini_medallion]
+      strategies: [kalman_regime]
 
     # ── LONDON OPEN ───────────────────────────────────────────────────────────
     - name: london_open
-      start: "07:00"             # 12:30 IST
-      end: "09:30"               # 15:00 IST
+      start: "07:00"
+      end: "09:30"
       enabled: true
       lot_size_multiplier: 1.0
-      strategies: [momentum, kalman_regime, mini_medallion]
+      strategies: [momentum, kalman_regime, breakout]
 
     # ── LONDON CONTINUATION / NY PRE-MARKET ───────────────────────────────────
     - name: london_ny_overlap
-      start: "09:30"             # 15:00 IST
-      end: "12:00"               # 17:30 IST
+      start: "09:30"
+      end: "12:00"
       enabled: true
       lot_size_multiplier: 1.0
-      strategies: [momentum, kalman_regime, mini_medallion]
+      strategies: [momentum, kalman_regime, breakout]
 
     # ── NY OPEN / LONDON-NY OVERLAP ───────────────────────────────────────────
     - name: new_york_open
-      start: "12:00"             # 17:30 IST
-      end: "14:30"               # 20:00 IST
+      start: "12:00"
+      end: "14:30"
       enabled: true
       lot_size_multiplier: 1.0
-      strategies: [momentum, kalman_regime, mini_medallion]
+      strategies: [momentum, kalman_regime, breakout]
 
     # ── NY EVENING / LATE SESSION ─────────────────────────────────────────────
     - name: ny_evening
-      start: "14:30"             # 20:00 IST
-      end: "20:30"               # 02:00 IST next day
+      start: "14:30"
+      end: "20:30"
       enabled: true
       lot_size_multiplier: 0.75
-      strategies: [kalman_regime, mini_medallion]
+      strategies: [kalman_regime]
 
   news_filter:
-    enabled: true               # RESTRICTED: No trades ±5 min around high-impact news
+    enabled: true
     csv_path: news/2026-04-03_news.csv
     currency: USD
     impacts:
       - high
       - red
-    buffer_min: 5               # 5-minute buffer
+    buffer_min: 5
     timezone: Asia/Kolkata
 
 monitoring:
   log_level: INFO
   state_save_interval_sec: 10
   enable_console_logging: true
-
   alerts:
     kill_switch: true
-    daily_loss_pct: 0.02        # Alert at 2% daily loss
+    daily_loss_pct: 0.008
 
 data:
   timeframes:
