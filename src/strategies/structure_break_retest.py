@@ -316,11 +316,21 @@ class StructureBreakRetestStrategy(BaseStrategy):
             side = OrderSide.SELL
 
         # ── Phase 6: Emit pure signal ────────────────────────────────────
-        # Strength: ADX-normalized + rejection quality bonus
+        # Strength formula v2: heavier rejection weight + ADX momentum bonus.
+        # Backtest v1 showed strength couldn't distinguish winners (0.735)
+        # from losers (0.737) — rejection quality and ADX momentum are the
+        # true differentiators, not just ADX level.
+        prev_adx = float(adx.iloc[-2]) if not pd.isna(adx.iloc[-2]) else current_adx
+        adx_rising = current_adx > prev_adx
+
         adx_norm = min(
             (current_adx - self.adx_min_threshold) / 50.0, 1.0
         )
-        strength = min(0.50 + adx_norm * 0.25 + rejection * 0.20, 1.0)
+        adx_momentum_bonus = 0.10 if adx_rising else 0.0
+        strength = min(
+            0.40 + adx_norm * 0.15 + rejection * 0.30 + adx_momentum_bonus,
+            1.0,
+        )
 
         # Clear pending break — it has been consumed
         self._pending_break = None
@@ -337,6 +347,7 @@ class StructureBreakRetestStrategy(BaseStrategy):
                 "rejection_ratio": round(rejection, 3),
                 "retest_bar_count": self._bars_since_break,
                 "adx": current_adx,
+                "adx_rising": adx_rising,
                 "rsi": current_rsi,
             },
         )
