@@ -177,6 +177,12 @@ class StructureBreakRetestStrategy(BaseStrategy):
         self.cooldown_bars = config.get("cooldown_bars", 10)
         self._bars_since_signal = self.cooldown_bars  # Allow first trade immediately
 
+        # v2 filters — session, EMA trend, strength gate
+        self.ema_trend_period = config.get("ema_trend_period", 50)
+        self.min_strength = config.get("min_strength", 0.0)
+        self.session_hours = config.get("session_hours", None)  # e.g. [5,6,7,13,16,17,22]
+        self.adx_max_threshold = config.get("adx_max_threshold", 60)
+
         # Pending break state — visible and mutated only in on_bar()
         # None when no break is being tracked
         self._pending_break: Optional[Dict[str, Any]] = None
@@ -205,6 +211,14 @@ class StructureBreakRetestStrategy(BaseStrategy):
             )
             return None
 
+        # ── Session filter ───────────────────────────────────────────
+        if self.session_hours is not None:
+            bar_ts = bars.index[-1]
+            bar_hour = getattr(bar_ts, 'hour', None)
+            if bar_hour is not None and bar_hour not in self.session_hours:
+                self._log_no_signal(f"Outside session hours: {bar_hour}")
+                return None
+
         # ── Regime ───────────────────────────────────────────────────────
         regime = (
             self.ml_regime if self.ml_regime is not None else MarketRegime.TREND
@@ -214,6 +228,7 @@ class StructureBreakRetestStrategy(BaseStrategy):
         atr = Indicators.atr(bars, period=14)
         rsi = Indicators.rsi(bars, period=14)
         adx = Indicators.adx(bars, period=14)
+        ema_trend = Indicators.ema(bars, period=self.ema_trend_period)
 
         current_close = float(bars["close"].iloc[-1])
         current_open = float(bars["open"].iloc[-1])
@@ -222,9 +237,10 @@ class StructureBreakRetestStrategy(BaseStrategy):
         current_atr = float(atr.iloc[-1])
         current_rsi = float(rsi.iloc[-1])
         current_adx = float(adx.iloc[-1])
+        current_ema = float(ema_trend.iloc[-1])
 
         if any(
-            np.isnan(v) for v in [current_atr, current_rsi, current_adx]
+            np.isnan(v) for v in [current_atr, current_rsi, current_adx, current_ema]
         ):
             self._log_no_signal("Indicator calculation failed")
             return None
@@ -306,6 +322,25 @@ class StructureBreakRetestStrategy(BaseStrategy):
             self._log_no_signal(f"RSI oversold: {current_rsi:.1f}")
             return None
 
+        # Filter: ADX not too high (avoid whipsaw in overheated trends)
+        if current_adx > self.adx_max_threshold:
+            self._log_no_signal(
+                f"ADX too high: {current_adx:.1f} > {self.adx_max_threshold}"
+            )
+            return None
+
+        # Filter: EMA trend alignment — only trade in direction of trend
+        if direction == "bullish" and current_close < current_ema:
+            self._log_no_signal(
+                f"EMA trend bearish: close {current_close:.2f} < EMA {current_ema:.2f}"
+            )
+            return None
+        if direction == "bearish" and current_close > current_ema:
+            self._log_no_signal(
+                f"EMA trend bullish: close {current_close:.2f} > EMA {current_ema:.2f}"
+            )
+            return None
+
         # ── Phase 5: Direction gate ──────────────────────────────────────
         if direction == "bullish":
             side = OrderSide.BUY
@@ -331,6 +366,13 @@ class StructureBreakRetestStrategy(BaseStrategy):
             0.40 + adx_norm * 0.15 + rejection * 0.30 + adx_momentum_bonus,
             1.0,
         )
+
+        # Strength gate — reject weak signals
+        if self.min_strength > 0 and strength < self.min_strength:
+            self._log_no_signal(
+                f"Strength too low: {strength:.2f} < {self.min_strength}"
+            )
+            return None
 
         # Clear pending break — it has been consumed
         self._pending_break = None
