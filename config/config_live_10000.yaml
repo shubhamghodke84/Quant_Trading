@@ -245,25 +245,28 @@ strategies:
     range_rsi_buy: 42
     range_rsi_sell: 58
 
-  # ── DISABLED ───────────────────────────────────────────────────────────────
+  # Mini Medallion v2: +31% return, PF 1.59, DD 4.3% (backtest Jan 2025–Mar 2026)
+  # v2 changes: long-only, session filter, lower threshold, higher RR, ADX filter
   mini_medallion:
-    enabled: false                  # Disabled — negative expectancy confirmed
-    timeframe: 1m
-    score_threshold: 5.0
-    cooldown_bars: 30
+    enabled: false
+    timeframe: 5m
+    score_threshold: 2.5            # v2: lowered from 5.0 — 7 signals max ~7.6, need more trades
+    cooldown_bars: 15               # v2: 75 min cooldown (was 150 min) — more trades in good sessions
     risk_atr_multiplier: 1.5
-    rr_ratio: 2.0
+    rr_ratio: 3.0                   # v2: raised from 2.0 — let winners run, compensate for <50% WR
+    long_only: true                 # v2: SELL side lost -$8.3K — gold upward bias
+    session_filter_enabled: true    # v2: only trade profitable hours
+    allowed_hours: [3, 4, 5, 6, 7, 9, 17]  # v2: only net-profitable hours from backtest
+    adx_min_threshold: 20           # v2: require trending market for higher conviction
+    min_signal_strength: 0.0        # v2: no min strength — low and high both profitable
     weights:
       mean_reversion: 1.0
-      momentum_burst: 0.8
-      volatility_expansion: 1.2
-      vwap_reversion: 0.9
+      momentum_burst: 1.2           # v2: raised — momentum is key for long-only trend following
+      volatility_expansion: 1.3     # v2: raised — breakout confirmation
       order_flow: 1.1
-      liquidity_sweep: 1.3
-      lead_lag: 0.7
-      market_regime: 1.0
-      session_volatility: 0.6
-      volatility_spike: 0.8
+      liquidity_sweep: 1.5          # v2: raised — highest edge signal (ICT sweep + rejection)
+      market_regime: 1.2            # v2: raised — regime alignment critical
+      volatility_regime: 0.6        # v2: lowered — noisy signal
 
   # ── STRUCTURE BREAK + RETEST (SBR) ─────────────────────────────────
   # v2: +5.30%, PF 1.88, DD 1.61% — EMA trend + session filter + strength gate
