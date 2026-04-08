@@ -188,7 +188,6 @@ strategies:
     only_in_regime: RANGE
 
   # ── PRIMARY STRATEGY ──────────────────────────────────────────────────────
-  # Momentum: Our tuned params (best risk-adjusted: +29.67%, PF 1.27, DD 8.75%)
   momentum:
     enabled: true
     timeframe: 5m
@@ -196,11 +195,11 @@ strategies:
     ema_period: 20
     rr_ratio: 2.5
     atr_stop_multiplier: 1.5
-    rsi_bull_threshold: 55       # Tuned — require clear bullish RSI
-    rsi_bear_threshold: 45       # Tuned — require clear bearish RSI
+    rsi_bull_threshold: 52
+    rsi_bear_threshold: 48
     rsi_overbought: 78
     rsi_oversold: 22
-    adx_min_threshold: 25        # Tuned — strong trend confirmation (50K's 20 overtraded)
+    adx_min_threshold: 20
     volume_confirmation: false
     macd_fast: 12
     macd_slow: 26
@@ -209,66 +208,81 @@ strategies:
     ema_mid: 21
     ema_slow: 30
     rsi_slope_bars: 3
-    min_signal_strength: 0.65    # Tuned — fewer but higher quality signals (50K's 0.50 = 40% DD)
+    min_signal_strength: 0.50
+    min_signal_strength_sell: 0.60
     only_in_regime: TREND
 
   # ── SECONDARY STRATEGY ────────────────────────────────────────────────────
-  # Kalman: HYBRID — long_only from 50K + wider stops from our tuning
   kalman_regime:
     enabled: true
     timeframe: 15m
-    long_only: true                 # From 50K — SELL side lost -$1,539, BUY side +$2,545
+    long_only: true                 # SELL side lost -$3,106 even with MACD filters. Long-only.
     kalman_q: 0.00001
     kalman_r: 0.01
     rv_window: 20
     rv_ma_window: 100
     zscore_window: 20
-    entry_threshold: 2.5
-    trend_adx_min: 28              # Tuned — stronger trend confirmation
-    kalman_confirm_bars: 3         # Tuned — 3-bar confirmation
-    min_signal_strength: 0.60      # Tuned — moderate filter
-    cooldown_bars: 80              # Tuned — 1-2 trades/day max
+    entry_threshold: 2.0            # v2: lowered from 2.5 — more range entries
+    trend_adx_min: 20               # v2: lowered from 22
+    kalman_confirm_bars: 2          # Keep 2-bar confirmation (proven in v1)
+    min_signal_strength: 0.50
+    cooldown_bars: 2                # v2: 30 min cooldown (was 30 bars = 7.5hr!)
     atr_period: 14
-    sl_atr_multiplier: 1.5         # 50K value — tighter SL pairs well with long_only
-    tp_atr_multiplier: 4.0         # Tuned — achievable TP
+    sl_atr_multiplier: 1.5
+    tp_atr_multiplier: 8.0          # v2: 8x ATR TP — let big trends run
     news_filter: true
+    # v2: session filter only — EMA/MACD disabled (hurt WR in best hours)
+    session_filter_enabled: true
+    allowed_sessions: [[1,1],[3,6],[15,15],[20,21]]
+    ema_confirm_enabled: false
+    macd_confirmation: false
+    kalman_accel_enabled: false
+    stoch_confirm_enabled: false
+    range_rsi_buy: 42
+    range_rsi_sell: 58
 
-  # ── TERTIARY STRATEGY ─────────────────────────────────────────────────────
-  # Mini Medallion: DISABLED — negative expectancy confirmed on both 5K and 50K
+  # ── DISABLED ───────────────────────────────────────────────────────────────
   mini_medallion:
-    enabled: false
+    enabled: false                  # Disabled — negative expectancy confirmed
     timeframe: 1m
-    score_threshold: 4.0
-    cooldown_bars: 90
-    risk_atr_multiplier: 2.0
+    score_threshold: 5.0
+    cooldown_bars: 30
+    risk_atr_multiplier: 1.5
     rr_ratio: 2.0
     weights:
-      mean_reversion: 1.2
-      momentum_burst: 1.0
+      mean_reversion: 1.0
+      momentum_burst: 0.8
       volatility_expansion: 1.2
+      vwap_reversion: 0.9
       order_flow: 1.1
       liquidity_sweep: 1.3
+      lead_lag: 0.7
       market_regime: 1.0
-      volatility_regime: 0.8
+      session_volatility: 0.6
+      volatility_spike: 0.8
 
   # ── STRUCTURE BREAK + RETEST (SBR) ─────────────────────────────────
-  # Trades confirmed retests of broken Donchian channel structure.
-  # Backtest (50K, Jan 2025–Mar 2026): +0.79%, PF 1.03, DD 4.07%, 708 trades
+  # v2: +5.30%, PF 1.88, DD 1.61% — EMA trend + session filter + strength gate
   sbr:
     enabled: true
     timeframe: 5m
     lookback_period: 20
-    retest_tolerance_atr: 0.5
-    min_rejection_ratio: 0.6
-    retest_window_bars: 30
-    adx_min_threshold: 20
-    rsi_overbought: 75
-    rsi_oversold: 25
-    atr_stop_multiplier: 1.5
-    rr_ratio: 2.5
-    cooldown_bars: 10
+    retest_tolerance_atr: 0.4
+    min_rejection_ratio: 0.55
+    retest_window_bars: 20
+    adx_min_threshold: 22
+    adx_max_threshold: 55
+    rsi_overbought: 70
+    rsi_oversold: 30
+    atr_stop_multiplier: 1.2
+    rr_ratio: 2.0
+    cooldown_bars: 8
     long_only: false
     only_in_regime: TREND
+    # v2 filters
+    ema_trend_period: 50
+    min_strength: 0.65
+    session_hours: [5, 6, 7, 13, 16, 17, 22]
 
 trading_hours:
   # Friday cutoff disabled for 24/7 crypto/weekend trading
