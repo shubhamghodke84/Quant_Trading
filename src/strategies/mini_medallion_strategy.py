@@ -24,15 +24,25 @@ class MiniMedallionStrategy(BaseStrategy):
 
     def __init__(self, symbol: Symbol, config: Dict[str, Any]):
         super().__init__(symbol, config)
-        
+
         self.timeframe = config.get('timeframe', '1m')
         self.score_threshold = config.get('score_threshold', 3.5)
         self.fixed_lot = config.get('fixed_lot', None)
 
+        # Long-only mode: SELL side loses heavily on gold (upward bias)
+        self.long_only = config.get('long_only', False)
+
+        # Session filter: only trade during profitable hours
+        self.session_filter_enabled = config.get('session_filter_enabled', False)
+        self.allowed_hours = config.get('allowed_hours', [])
+
+        # ADX trend filter: require minimum trend strength
+        self.adx_min_threshold = config.get('adx_min_threshold', 0)
+
         # Trade cooldown: minimum bars between signals to prevent overtrading
         self.cooldown_bars = config.get('cooldown_bars', 30)
         self._bars_since_signal = self.cooldown_bars
-        
+
         # Signal Weights — cleaned up:
         # - Removed lead_lag (always returns 0, dead code)
         # - Removed vwap_reversion (duplicate of mean_reversion, both measure VWAP distance)
@@ -55,6 +65,12 @@ class MiniMedallionStrategy(BaseStrategy):
         # Need enough bars for 30-period VWAP and other indicators
         if len(bars) < 50:
             return None
+
+        # Session filter: skip bars outside profitable hours
+        if self.session_filter_enabled and self.allowed_hours:
+            bar_hour = bars.index[-1].hour if hasattr(bars.index[-1], 'hour') else 0
+            if bar_hour not in self.allowed_hours:
+                return None
 
         # Cooldown to prevent overtrading
         self._bars_since_signal += 1
@@ -90,6 +106,11 @@ class MiniMedallionStrategy(BaseStrategy):
         for name, sig_val in signals.items():
             alpha_score += sig_val * self.weights.get(name, 1.0)
 
+        # ADX trend filter: require minimum trend strength for higher conviction
+        current_adx = float(adx.iloc[-1])
+        if self.adx_min_threshold > 0 and current_adx < self.adx_min_threshold:
+            return None
+
         # Decision threshold logic
         side = None
         if alpha_score > self.score_threshold:
@@ -98,6 +119,10 @@ class MiniMedallionStrategy(BaseStrategy):
             side = OrderSide.SELL
 
         if side is None:
+            return None
+
+        # Long-only mode: skip SELL signals (gold has strong upward bias)
+        if self.long_only and side == OrderSide.SELL:
             return None
 
         # EMA trend alignment: only take signals in direction of 50-period EMA
