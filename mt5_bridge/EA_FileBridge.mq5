@@ -446,27 +446,46 @@ void WriteStatus()
    json += "\"total_exposure\":" + DoubleToString(GetTotalExposure(), 2) + ",";
    json += "\"server_time\":\"" + TimeToString(TimeCurrent(), TIME_DATE|TIME_SECONDS) + "\",";
    
-   // === NEW: Multi-Symbol Support ===
+   // Jeff Dean: only emit quotes for symbols with open positions or the chart symbol.
+   // Iterating all 200+ Market Watch symbols wastes I/O and bloats the status file.
    json += "\"quotes\":{";
-   int total = SymbolsTotal(true);
    int added = 0;
-   
-   for(int i=0; i<total; i++)
+
+   // Always include the chart symbol
+   MqlTick chartTick;
+   if(SymbolInfoTick(_Symbol, chartTick))
    {
-      string symbol = SymbolName(i, true);
-      MqlTick tick;
-      
-      if(SymbolInfoTick(symbol, tick))
+      int digits = (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS);
+      json += "\"" + _Symbol + "\":{";
+      json += "\"bid\":" + DoubleToString(chartTick.bid, digits) + ",";
+      json += "\"ask\":" + DoubleToString(chartTick.ask, digits) + ",";
+      json += "\"volume\":" + IntegerToString(chartTick.volume) + ",";
+      json += "\"volume_real\":" + DoubleToString(chartTick.volume_real, 2) + ",";
+      json += "\"time\":" + IntegerToString(chartTick.time);
+      json += "}";
+      added++;
+   }
+
+   // Add symbols from open positions (deduplicated by skipping chart symbol)
+   int posTotal = PositionsTotal();
+   for(int i = 0; i < posTotal; i++)
+   {
+      ulong posTicket = PositionGetTicket(i);
+      if(posTicket <= 0) continue;
+      string posSymbol = PositionGetString(POSITION_SYMBOL);
+      if(posSymbol == _Symbol) continue;  // already added
+
+      MqlTick posTick;
+      if(SymbolInfoTick(posSymbol, posTick))
       {
-         int digits = (int)SymbolInfoInteger(symbol, SYMBOL_DIGITS);
-         
+         int digits = (int)SymbolInfoInteger(posSymbol, SYMBOL_DIGITS);
          if(added > 0) json += ",";
-         json += "\"" + symbol + "\":{";
-         json += "\"bid\":" + DoubleToString(tick.bid, digits) + ",";
-         json += "\"ask\":" + DoubleToString(tick.ask, digits) + ",";
-         json += "\"volume\":" + IntegerToString(tick.volume) + ",";
-         json += "\"volume_real\":" + DoubleToString(tick.volume_real, 2) + ",";
-         json += "\"time\":" + IntegerToString(tick.time);
+         json += "\"" + posSymbol + "\":{";
+         json += "\"bid\":" + DoubleToString(posTick.bid, digits) + ",";
+         json += "\"ask\":" + DoubleToString(posTick.ask, digits) + ",";
+         json += "\"volume\":" + IntegerToString(posTick.volume) + ",";
+         json += "\"volume_real\":" + DoubleToString(posTick.volume_real, 2) + ",";
+         json += "\"time\":" + IntegerToString(posTick.time);
          json += "}";
          added++;
       }
@@ -518,6 +537,7 @@ void ProcessCommands()
    else if(command == "CLOSE_POSITION")   HandleClosePosition(commandJson);
    else if(command == "MODIFY_ORDER")     HandleModifyOrder(commandJson);
    else if(command == "GET_LIMITS")       HandleGetLimits();
+   else if(command == "GET_BARS")        HandleGetBars(commandJson);
 }
 
 //+------------------------------------------------------------------+
@@ -561,6 +581,64 @@ void HandleGetLimits()
    WriteResponse(json);
 }
 
+//+------------------------------------------------------------------+
+//| geohot: GET_BARS — fetch historical candles via CopyRates.       |
+//| Eliminates yfinance dependency on the Python side.               |
+//| Params: symbol, timeframe (M1/M5/M15/H1/H4/D1), count           |
+//+------------------------------------------------------------------+
+void HandleGetBars(string json)
+{
+   string symbol = ExtractJsonValue(json, "symbol");
+   string tfStr  = ExtractJsonValue(json, "timeframe");
+   int    count  = (int)StringToInteger(ExtractJsonValue(json, "count"));
+
+   if(symbol == "") symbol = _Symbol;
+   if(count <= 0)   count  = 500;
+   if(count > 5000) count  = 5000;  // safety cap
+
+   // Map string to ENUM_TIMEFRAMES
+   ENUM_TIMEFRAMES tf = PERIOD_M1;
+   if(tfStr == "M5"  || tfStr == "5m")  tf = PERIOD_M5;
+   else if(tfStr == "M15" || tfStr == "15m") tf = PERIOD_M15;
+   else if(tfStr == "H1"  || tfStr == "1h")  tf = PERIOD_H1;
+   else if(tfStr == "H4"  || tfStr == "4h")  tf = PERIOD_H4;
+   else if(tfStr == "D1"  || tfStr == "1d")  tf = PERIOD_D1;
+
+   if(!SymbolSelect(symbol, true))
+   {
+      WriteResponse("{\"status\":\"ERROR\",\"message\":\"Symbol not available: " + symbol + "\"}");
+      return;
+   }
+
+   MqlRates rates[];
+   ArraySetAsSeries(rates, false);
+   int copied = CopyRates(symbol, tf, 0, count, rates);
+
+   if(copied <= 0)
+   {
+      WriteResponse("{\"status\":\"ERROR\",\"message\":\"CopyRates returned 0 bars\"}");
+      return;
+   }
+
+   int digits = (int)SymbolInfoInteger(symbol, SYMBOL_DIGITS);
+
+   string resp = "{\"status\":\"SUCCESS\",\"symbol\":\"" + symbol + "\",\"timeframe\":\"" + tfStr + "\",\"bars\":[";
+   for(int i = 0; i < copied; i++)
+   {
+      if(i > 0) resp += ",";
+      resp += "{";
+      resp += "\"time\":"   + IntegerToString(rates[i].time)               + ",";
+      resp += "\"open\":"   + DoubleToString(rates[i].open,  digits)       + ",";
+      resp += "\"high\":"   + DoubleToString(rates[i].high,  digits)       + ",";
+      resp += "\"low\":"    + DoubleToString(rates[i].low,   digits)       + ",";
+      resp += "\"close\":"  + DoubleToString(rates[i].close, digits)       + ",";
+      resp += "\"volume\":" + IntegerToString(rates[i].tick_volume);
+      resp += "}";
+   }
+   resp += "]}";
+   WriteResponse(resp);
+}
+
 void HandleGetPositions()
 {
    string json = "{\"positions\":[";
@@ -573,18 +651,23 @@ void HandleGetPositions()
       if(ticket > 0)
       {
          if(PositionGetInteger(POSITION_MAGIC) != 55555) continue;
-         
+
+         // Knuth: use per-symbol digits — _Digits is chart symbol only,
+         // truncates prices for cross-symbol positions (e.g. EURUSD 5dp → 2dp)
+         string posSymbol = PositionGetString(POSITION_SYMBOL);
+         int posDigits = (int)SymbolInfoInteger(posSymbol, SYMBOL_DIGITS);
+
          if(count > 0) json += ",";
          json += "{";
          json += "\"ticket\":" + IntegerToString(ticket) + ",";
-         json += "\"symbol\":\"" + PositionGetString(POSITION_SYMBOL) + "\",";
+         json += "\"symbol\":\"" + posSymbol + "\",";
          json += "\"type\":" + IntegerToString(PositionGetInteger(POSITION_TYPE)) + ",";
          json += "\"volume\":" + DoubleToString(PositionGetDouble(POSITION_VOLUME), 2) + ",";
-         json += "\"price_open\":" + DoubleToString(PositionGetDouble(POSITION_PRICE_OPEN), _Digits) + ",";
-         json += "\"price_current\":" + DoubleToString(PositionGetDouble(POSITION_PRICE_CURRENT), _Digits) + ",";
+         json += "\"price_open\":" + DoubleToString(PositionGetDouble(POSITION_PRICE_OPEN), posDigits) + ",";
+         json += "\"price_current\":" + DoubleToString(PositionGetDouble(POSITION_PRICE_CURRENT), posDigits) + ",";
          json += "\"profit\":" + DoubleToString(PositionGetDouble(POSITION_PROFIT), 2) + ",";
-         json += "\"sl\":" + DoubleToString(PositionGetDouble(POSITION_SL), _Digits) + ",";
-         json += "\"tp\":" + DoubleToString(PositionGetDouble(POSITION_TP), _Digits) + ",";
+         json += "\"sl\":" + DoubleToString(PositionGetDouble(POSITION_SL), posDigits) + ",";
+         json += "\"tp\":" + DoubleToString(PositionGetDouble(POSITION_TP), posDigits) + ",";
          json += "\"comment\":\"" + PositionGetString(POSITION_COMMENT) + "\",";
          json += "\"magic\":" + IntegerToString(PositionGetInteger(POSITION_MAGIC));
          json += "}";
@@ -662,20 +745,24 @@ void HandleGetHistory(string json)
                }
             }
 
+            // Knuth: per-symbol digits, not _Digits
+            string dealSymbol = HistoryDealGetString(ticket, DEAL_SYMBOL);
+            int dealDigits = (int)SymbolInfoInteger(dealSymbol, SYMBOL_DIGITS);
+
             if(count > 0) resp += ",";
             resp += "{";
-            resp += "\"ticket\":"         + IntegerToString(ticket)                                        + ",";
-            resp += "\"position_ticket\":" + IntegerToString(pos_id)                                       + ",";
-            resp += "\"symbol\":\""       + HistoryDealGetString (ticket, DEAL_SYMBOL)              + "\",";
-            resp += "\"type\":"           + IntegerToString(HistoryDealGetInteger(ticket, DEAL_TYPE))      + ",";
-            resp += "\"volume\":"         + DoubleToString (HistoryDealGetDouble (ticket, DEAL_VOLUME), 2) + ",";
-            resp += "\"price\":"          + DoubleToString (HistoryDealGetDouble (ticket, DEAL_PRICE),  _Digits) + ",";
-            resp += "\"entry_price\":"    + DoubleToString (ep, _Digits)                                   + ",";
-            resp += "\"profit\":"         + DoubleToString (HistoryDealGetDouble (ticket, DEAL_PROFIT),  2) + ",";
-            resp += "\"swap\":"           + DoubleToString (HistoryDealGetDouble (ticket, DEAL_SWAP),    2) + ",";
-            resp += "\"commission\":"     + DoubleToString (HistoryDealGetDouble (ticket, DEAL_COMMISSION), 2) + ",";
-            resp += "\"comment\":\""      + HistoryDealGetString (ticket, DEAL_COMMENT)             + "\",";
-            resp += "\"entry_time\":"     + IntegerToString(et)                                            + ",";
+            resp += "\"ticket\":"         + IntegerToString(ticket)                                            + ",";
+            resp += "\"position_ticket\":" + IntegerToString(pos_id)                                           + ",";
+            resp += "\"symbol\":\""       + dealSymbol                                                  + "\",";
+            resp += "\"type\":"           + IntegerToString(HistoryDealGetInteger(ticket, DEAL_TYPE))          + ",";
+            resp += "\"volume\":"         + DoubleToString (HistoryDealGetDouble (ticket, DEAL_VOLUME), 2)     + ",";
+            resp += "\"price\":"          + DoubleToString (HistoryDealGetDouble (ticket, DEAL_PRICE),  dealDigits) + ",";
+            resp += "\"entry_price\":"    + DoubleToString (ep, dealDigits)                                     + ",";
+            resp += "\"profit\":"         + DoubleToString (HistoryDealGetDouble (ticket, DEAL_PROFIT),  2)     + ",";
+            resp += "\"swap\":"           + DoubleToString (HistoryDealGetDouble (ticket, DEAL_SWAP),    2)     + ",";
+            resp += "\"commission\":"     + DoubleToString (HistoryDealGetDouble (ticket, DEAL_COMMISSION), 2)  + ",";
+            resp += "\"comment\":\""      + HistoryDealGetString (ticket, DEAL_COMMENT)                 + "\",";
+            resp += "\"entry_time\":"     + IntegerToString(et)                                                + ",";
             resp += "\"time\":"           + IntegerToString(HistoryDealGetInteger(ticket, DEAL_TIME));
             resp += "}";
             count++;
@@ -757,7 +844,8 @@ void HandlePlaceOrder(string json)
       
       string successMsg = "{\"status\":\"SUCCESS\"";
       successMsg += ",\"ticket\":" + IntegerToString(result.order);
-      successMsg += ",\"price\":" + DoubleToString(result.price, _Digits);
+      int orderDigits = (int)SymbolInfoInteger(symbol, SYMBOL_DIGITS);
+      successMsg += ",\"price\":" + DoubleToString(result.price, orderDigits);
       successMsg += ",\"volume\":" + DoubleToString(volume, 2);
       successMsg += ",\"slippage_pips\":" + DoubleToString(slippagePips, 2) + "}";
       WriteResponse(successMsg);
@@ -831,9 +919,16 @@ void HandleModifyOrder(string json)
       WriteResponse("{\"status\":\"ERROR\",\"message\":\"Position not found for MODIFY_ORDER\"}");
       return;
    }
-   
+
+   // Torvalds: consistent magic filter — same rule as HandleGetPositions/HandleClosePosition
+   if(PositionGetInteger(POSITION_MAGIC) != 55555)
+   {
+      WriteResponse("{\"status\":\"ERROR\",\"message\":\"Position not owned by EA (magic mismatch)\"}");
+      return;
+   }
+
    string symbol = PositionGetString(POSITION_SYMBOL);
-   
+
    if(new_sl == 0) new_sl = PositionGetDouble(POSITION_SL);
    if(new_tp == 0) new_tp = PositionGetDouble(POSITION_TP);
    
@@ -848,12 +943,13 @@ void HandleModifyOrder(string json)
    request.sl       = new_sl;
    request.tp       = new_tp;
    
+   int modDigits = (int)SymbolInfoInteger(symbol, SYMBOL_DIGITS);
    if(OrderSend(request, result))
    {
       string msg = "{\"status\":\"SUCCESS\"";
       msg += ",\"ticket\":" + IntegerToString(ticket);
-      msg += ",\"new_sl\":" + DoubleToString(new_sl, _Digits);
-      msg += ",\"new_tp\":" + DoubleToString(new_tp, _Digits) + "}";
+      msg += ",\"new_sl\":" + DoubleToString(new_sl, modDigits);
+      msg += ",\"new_tp\":" + DoubleToString(new_tp, modDigits) + "}";
       WriteResponse(msg);
       Print("MODIFY_ORDER OK ticket=", ticket, " sl=", new_sl, " tp=", new_tp);
    }
@@ -917,11 +1013,23 @@ bool SendOrderWithRetry(MqlTradeRequest& request, MqlTradeResult& result)
 
 void WriteResponse(string json)
 {
-   int handle = FileOpen(ResponseFile, FILE_WRITE|FILE_TXT|FILE_COMMON);
+   // Carmack: retry loop matches WriteStatus — prevents lost responses
+   // when Python reads the file at the same instant we try to write.
+   int handle = INVALID_HANDLE;
+   for(int i = 0; i < 20; i++)
+   {
+      handle = FileOpen(ResponseFile, FILE_WRITE|FILE_TXT|FILE_COMMON);
+      if(handle != INVALID_HANDLE) break;
+      Sleep(5);
+   }
    if(handle != INVALID_HANDLE)
    {
       FileWriteString(handle, json);
       FileClose(handle);
+   }
+   else
+   {
+      Print("WriteResponse FAILED after 20 retries — response lost: ", StringSubstr(json, 0, 80));
    }
 }
 
