@@ -29,79 +29,42 @@ from ..core.types import Symbol, Signal
 
 class StrategyManager:
     """Manage multiple trading strategies with MTF support."""
-    
+
+    # Torvalds: registry eliminates special cases — add new strategies here.
+    STRATEGY_REGISTRY: Dict[str, type] = {
+        'breakout':       BreakoutStrategy,
+        'mean_reversion': MeanReversionStrategy,
+        'vwap':           VWAPStrategy,
+        'momentum':       MomentumStrategy,
+        'kalman_regime':  KalmanRegimeStrategy,
+        'mini_medallion': MiniMedallionStrategy,
+        'sbr':            StructureBreakRetestStrategy,
+        'supply_demand':  SupplyDemandStrategy,
+    }
+
     def __init__(self, symbols: List[Symbol], config: dict):
         """
         Initialize strategy manager.
-        
+
         Args:
             symbols: List of symbols to trade
             config: Full configuration dict
         """
         self.symbols = {s.ticker: s for s in symbols}
         self.config = config
-        
-        # Initialize strategies for each symbol
+
+        # Initialize strategies for each symbol via registry
         self.strategies: Dict[str, Dict[str, BaseStrategy]] = {}
-        
+        strategies_cfg = config.get('strategies', {})
+
         for symbol in symbols:
             self.strategies[symbol.ticker] = {}
-            
-            # Initialize breakout strategy if enabled
-            if config.get('strategies', {}).get('breakout', {}).get('enabled', False):
-                self.strategies[symbol.ticker]['breakout'] = BreakoutStrategy(
-                    symbol=symbol,
-                    config=config.get('strategies', {}).get('breakout', {})
-                )
-            
-            # Initialize mean reversion strategy if enabled
-            if config.get('strategies', {}).get('mean_reversion', {}).get('enabled', False):
-                self.strategies[symbol.ticker]['mean_reversion'] = MeanReversionStrategy(
-                    symbol=symbol,
-                    config=config.get('strategies', {}).get('mean_reversion', {})
-                )
-            
-            # Initialize VWAP strategy if enabled
-            if config.get('strategies', {}).get('vwap', {}).get('enabled', False):
-                self.strategies[symbol.ticker]['vwap'] = VWAPStrategy(
-                    symbol=symbol,
-                    config=config.get('strategies', {}).get('vwap', {})
-                )
-            
-            # Initialize Momentum strategy if enabled
-            if config.get('strategies', {}).get('momentum', {}).get('enabled', False):
-                self.strategies[symbol.ticker]['momentum'] = MomentumStrategy(
-                    symbol=symbol,
-                    config=config.get('strategies', {}).get('momentum', {})
-                )
-            
-            # Initialize Kalman Regime strategy if enabled
-            if config.get('strategies', {}).get('kalman_regime', {}).get('enabled', False):
-                self.strategies[symbol.ticker]['kalman_regime'] = KalmanRegimeStrategy(
-                    symbol=symbol,
-                    config=config.get('strategies', {}).get('kalman_regime', {})
-                )
-            
-            # Initialize Mini-Medallion strategy if enabled
-            if config.get('strategies', {}).get('mini_medallion', {}).get('enabled', False):
-                self.strategies[symbol.ticker]['mini_medallion'] = MiniMedallionStrategy(
-                    symbol=symbol,
-                    config=config.get('strategies', {}).get('mini_medallion', {})
-                )
-            
-            # Initialize Structure Break + Retest strategy if enabled
-            if config.get('strategies', {}).get('sbr', {}).get('enabled', False):
-                self.strategies[symbol.ticker]['sbr'] = StructureBreakRetestStrategy(
-                    symbol=symbol,
-                    config=config.get('strategies', {}).get('sbr', {})
-                )
-
-            # Initialize Supply & Demand Zone strategy if enabled
-            if config.get('strategies', {}).get('supply_demand', {}).get('enabled', False):
-                self.strategies[symbol.ticker]['supply_demand'] = SupplyDemandStrategy(
-                    symbol=symbol,
-                    config=config.get('strategies', {}).get('supply_demand', {})
-                )
+            for name, cls in self.STRATEGY_REGISTRY.items():
+                strat_cfg = strategies_cfg.get(name, {})
+                if strat_cfg.get('enabled', False):
+                    self.strategies[symbol.ticker][name] = cls(
+                        symbol=symbol, config=strat_cfg
+                    )
         
         from ..monitoring.logger import get_logger
         self.logger = get_logger(__name__)
@@ -163,8 +126,9 @@ class StrategyManager:
                 signal = strategy.on_bar(bars)
                 
                 if signal:
-                    # Check global symbol cooldown before accepting signal (5-minute reversal buffer)
-                    cooldown_key = symbol
+                    # Knuth fix: cooldown keyed by (symbol, strategy) so
+                    # one strategy's signal doesn't suppress another's.
+                    cooldown_key = (symbol, strategy_name)
                     now = datetime.now(timezone.utc)
                     last_signal = self._last_signal_time.get(cooldown_key)
                     
