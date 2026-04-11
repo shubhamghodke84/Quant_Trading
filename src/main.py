@@ -57,6 +57,8 @@ from src.monitoring.trade_journal import TradeJournal
 from src.monitoring.performance_dashboard import PerformanceDashboard
 from src.data.news_filter import load_ff_events, is_news_blackout
 from src.risk.trailing_stop_manager import TrailingStopManager
+from src.core.session_manager import SessionManager
+from src.core.types import SessionState
 
 
 class TradingSystem:
@@ -111,30 +113,17 @@ class TradingSystem:
 
         # Regime ML override (written nightly by scripts/regime_classifier.py)
         self._regime_override: Optional[dict] = None
-        
+
         # The5ers: directional lock + 5-min reversal buffer state
         self._last_close_time: Dict[str, datetime] = {}  # 'BUY' or 'SELL' → close timestamp
         self._reversal_buffer_min: int = 5
-        
-        # ── NEW: Daily profit target ──────────────────────────────────────
-        # Stop emitting new signals once max_daily_profit achieved.
-        self._daily_wins_date: Optional[str] = None   # reset at midnight
-        self._max_daily_profit: float = 120.0  # overridden from config in setup()
-        
-        # ── NEW: 2-loss consecutive pause ────────────────────────────────
-        # After _loss_pause_threshold consecutive losses, suppress signals
-        # for _loss_pause_duration seconds.
-        self._consecutive_losses_today: int = 0
-        self._loss_pause_threshold: int = 2   # overridden from config
-        self._loss_pause_duration: int = 1800  # 30 min default
-        self._loss_pause_until: Optional[datetime] = None
-        
-        # ── NEW: Trailing stop manager ───────────────────────────────────
+
+        # Carmack + TJ: session state grouped into one visible object,
+        # managed by a focused SessionManager (not inline in main loop).
+        self._session_mgr = SessionManager(self.config)
+
+        # ── Trailing stop manager ────────────────────────────────────────
         self._trailing_stop_mgr: Optional[TrailingStopManager] = None
-        
-        # News filter events (loaded during setup if enabled)
-        self._news_events_df = None
-        self._news_filter_cfg = None
         
         # Shutdown handler
         signal.signal(signal.SIGINT, self._signal_handler)
@@ -254,13 +243,6 @@ class TradingSystem:
 
             self.logger.info("✓ Strategies ready")
             
-            # Read advanced session controls from config
-            risk_cfg = self.config.get('risk', {})
-            self._max_daily_profit = float(risk_cfg.get('max_daily_profit_usd', 120.0))
-            cb_cfg = risk_cfg.get('circuit_breaker', {})
-            self._loss_pause_threshold = cb_cfg.get('loss_pause_consecutive', 2)
-            self._loss_pause_duration = cb_cfg.get('loss_pause_minutes', 30) * 60
-            
             # Initialize trailing stop manager
             self._trailing_stop_mgr = TrailingStopManager(self.config)
             
@@ -294,24 +276,22 @@ class TradingSystem:
                         "No news CSV found — news filter disabled. "
                         "Run: python scripts/fetch_daily_news.py"
                     )
-                    self._news_events_df = None
                 else:
                     try:
-                        self._news_events_df = load_ff_events(
+                        news_df = load_ff_events(
                             csv_path=csv_path,
                             currency=nf_cfg.get('currency', 'USD'),
                             impacts=nf_cfg.get('impacts', ['high', 'red']),
                         )
-                        self._news_filter_cfg = nf_cfg
+                        self._session_mgr.set_news_events(news_df)
                         self.logger.info(
                             f"✓ News filter loaded: {csv_path} "
-                            f"({len(self._news_events_df)} events)"
+                            f"({len(news_df)} events)"
                         )
                     except Exception as e:
                         self.logger.warning(
                             f"News filter CSV failed to load ({csv_path}): {e} — filter disabled"
                         )
-                        self._news_events_df = None
 
             
             # 9. Restore state from crash (if any)
@@ -401,8 +381,9 @@ class TradingSystem:
                 if self.loop_iteration % 300 == 0:
                     self._display_dashboard()
                 
-                # Sleep briefly (don't hammer CPU)
-                time.sleep(1)
+                # Jeff Dean: 250ms loop = 4x better worst-case latency than 1s.
+                # Gold moves $0.50-2.00/s during news — 750ms matters.
+                time.sleep(0.25)
                 
             except (KillSwitchActiveError, DailyLossLimitError, DrawdownLimitError) as e:
                 # Critical risk violations - stop trading
@@ -447,13 +428,12 @@ class TradingSystem:
 
     def _process_strategies(self) -> None:
         """Process all strategies with per-strategy timeframe routing."""
-        # Reset daily tracking at midnight UTC
+        # Reset daily tracking at midnight UTC (SessionManager handles its own
+        # daily reset inside should_trade(), but we still need to trigger
+        # nightly classifier + RiskEngine reset here)
         today_str = datetime.now(timezone.utc).strftime('%Y-%m-%d')
-        if self._daily_wins_date != today_str:
-            self._daily_wins_date = today_str
-            self._consecutive_losses_today = 0
-            self._loss_pause_until = None
-            self.logger.info("[SessionManager] New trading day — counters reset")
+        if self._session_mgr.state.daily_wins_date != today_str:
+            self._session_mgr.state.reset_daily()
 
             # -- Run nightly regime classifier in background ---------------
             self._run_nightly_classifier()
@@ -474,25 +454,14 @@ class TradingSystem:
         # -- Intra-day regime shift check (self-throttled to every 4h) ------
         self._check_intraday_regime_shift()
 
-        # ── Daily profit target gate ──────────────────────────────────────────
+        # TJ: one call replaces ~80 lines of inline session/news/profit/loss logic
         daily_pnl = float(self._get_daily_pnl())
-        if self._max_daily_profit > 0 and daily_pnl >= self._max_daily_profit:
+        allowed, reason, allowed_strategies, lot_multiplier = (
+            self._session_mgr.should_trade(daily_pnl, self.loop_iteration)
+        )
+        if not allowed:
             if self.loop_iteration % 60 == 1:
-                self.logger.info(
-                    f"[SessionManager] Daily target reached — "
-                    f"${daily_pnl:.2f} / ${self._max_daily_profit:.2f}. No new signals today."
-                )
-            return
-
-        # ── Loss pause gate ───────────────────────────────────────
-        if self._loss_pause_until and datetime.now(timezone.utc) < self._loss_pause_until:
-            remaining = (self._loss_pause_until - datetime.now(timezone.utc)).seconds // 60
-            if self.loop_iteration % 60 == 1:
-                self.logger.info(
-                    f"[SessionManager] Loss pause active — "
-                    f"{self._consecutive_losses_today} consecutive losses. "
-                    f"{remaining} min remaining."
-                )
+                self.logger.info(f"[SessionManager] {reason}")
             return
 
         # Only process enabled symbols
@@ -500,7 +469,7 @@ class TradingSystem:
             ticker for ticker, cfg in self.config.get('symbols', {}).items()
             if cfg.get('enabled', False)
         ]
-        
+
         # Get strategy config
         strategy_config = self.config.get('strategies', {})
         min_bars = strategy_config.get('min_bars_required', 10)
@@ -514,67 +483,6 @@ class TradingSystem:
             'kalman_regime': strategy_config.get('kalman_regime', {}).get('timeframe', global_primary_tf),
             'mean_reversion':strategy_config.get('mean_reversion', {}).get('timeframe', global_primary_tf),
         }
-        
-        # News filter: skip all strategy processing during blackout
-        if self._news_events_df is not None and self._news_filter_cfg:
-            buffer_min = self._news_filter_cfg.get('buffer_min', 15)
-            tz = self._news_filter_cfg.get('timezone', 'Asia/Kolkata')
-            # Use UTC-aware datetime (consistent with rest of codebase)
-            if is_news_blackout(datetime.now(timezone.utc), self._news_events_df,
-                               buffer_min=buffer_min, timezone=tz):
-                if self.loop_iteration % 60 == 1:
-                    self.logger.info("News blackout active — skipping strategies")
-                return
-
-        # ── Session time enforcement ──────────────────────────────────────────
-        # Reads sessions from trading_hours.sessions config.
-        # If no sessions configured: runs 24/7.
-        # If sessions configured but none active: suppresses all signals.
-        sessions_cfg = self.config.get('trading_hours', {}).get('sessions', [])
-        allowed_strategies: set = set()   # empty set = ALL strategies allowed
-        in_any_session = not sessions_cfg  # if no config, always in-session
-
-        if sessions_cfg:
-            now_utc = datetime.now(timezone.utc)
-            now_hhmm = now_utc.strftime('%H:%M')
-
-            # ── Friday cutoff disabled via user instruction ────────────
-
-            for session in sessions_cfg:
-                if not session.get('enabled', True):
-                    continue
-                sstart = session.get('start', '00:00')
-                send   = session.get('end',   '23:59')
-                # Support sessions that cross midnight (e.g. 22:00-02:00)
-                if sstart <= send:
-                    active = sstart <= now_hhmm < send
-                else:
-                    active = now_hhmm >= sstart or now_hhmm < send
-                if active:
-                    in_any_session = True
-                    session_strats = session.get('strategies', [])
-                    if session_strats:
-                        allowed_strategies.update(session_strats)
-                    # Capture lot multiplier for this session
-                    self._current_session_lot_multiplier = float(
-                        session.get('lot_size_multiplier', 1.0)
-                    )
-                    if self.loop_iteration % 120 == 1:
-                        self.logger.info(
-                            f"[Session] Active: {session['name']} "
-                            f"({sstart}-{send} UTC) strategies="
-                            f"{session_strats if session_strats else 'ALL'} "
-                            f"lot_mult={self._current_session_lot_multiplier:.2f}"
-                        )
-                    break  # first matching session wins
-
-        if not in_any_session:
-            if self.loop_iteration % 120 == 1:
-                self.logger.info(
-                    f"[Session] {datetime.now(timezone.utc).strftime('%H:%M')} UTC "
-                    "— outside all session windows, waiting."
-                )
-            return
 
         for symbol_ticker in enabled_symbols:
             try:
@@ -616,11 +524,8 @@ class TradingSystem:
                         )
 
                 for _, signal in all_signals:
-                    # Inject session lot-size multiplier into signal metadata
-                    # ExecutionEngine reads this and scales position_size accordingly
-                    signal.metadata['lot_size_multiplier'] = getattr(
-                        self, '_current_session_lot_multiplier', 1.0
-                    )
+                    # Inject session lot-size multiplier from SessionManager
+                    signal.metadata['lot_size_multiplier'] = lot_multiplier
                     self._execute_signal(signal)
                     
             except Exception as e:
@@ -906,7 +811,8 @@ class TradingSystem:
 
             # ── Daily profit target gate ──────────────────────────────
             daily_pnl = self._get_daily_pnl()
-            if self._max_daily_profit > 0 and float(daily_pnl) >= self._max_daily_profit:
+            max_profit = self._session_mgr.state.max_daily_profit
+            if max_profit > 0 and float(daily_pnl) >= max_profit:
                 self.logger.info(
                     f"[SessionManager] Daily target hit (${float(daily_pnl):.2f}) — signal suppressed",
                     strategy=signal.strategy_name,
@@ -1202,43 +1108,33 @@ class TradingSystem:
                         elif pos_side == _PositionSide.SHORT:
                             self._last_close_time['SELL'] = now_utc
 
-                        # Session manager counters
-                        # Breakeven (pnl==0) does NOT reset consecutive-loss counter —
-                        # only a genuine profit does. This prevents gaming the circuit breaker
-                        # with flat trades.
+                        # Carmack: state mutations delegated to SessionState
+                        ss = self._session_mgr.state
                         if pnl > 0:
-                            self._consecutive_losses_today = 0  # reset only on actual win
+                            ss.record_win()
                             current_daily_pnl = float(self._get_daily_pnl())
-                            outcome = 'WIN'
                             self.logger.info(
-                                f"[SessionManager] {outcome} recorded — "
-                                f"pnl=${pnl:.2f} | daily total=${current_daily_pnl:.2f}/${self._max_daily_profit:.2f}"
+                                f"[SessionManager] WIN recorded — "
+                                f"pnl=${pnl:.2f} | daily total=${current_daily_pnl:.2f}"
+                                f"/${ss.max_daily_profit:.2f}"
                             )
-                            if self._max_daily_profit > 0 and current_daily_pnl >= self._max_daily_profit:
-                                self.logger.info(
-                                    f"[SessionManager] 🎯 DAILY TARGET HIT — "
-                                    f"no more signals today."
-                                )
                         elif pnl == 0:
                             self.logger.info(
-                                f"[SessionManager] BREAKEVEN recorded — "
-                                f"consecutive losses unchanged={self._consecutive_losses_today} pnl=${pnl:.2f}"
+                                f"[SessionManager] BREAKEVEN — "
+                                f"consecutive losses unchanged={ss.consecutive_losses_today}"
                             )
                         else:
-                            self._consecutive_losses_today += 1
+                            ss.record_loss()
                             self.logger.info(
-                                f"[SessionManager] LOSS recorded \u2014 "
-                                f"consecutive={self._consecutive_losses_today} pnl=${pnl:.2f}"
+                                f"[SessionManager] LOSS recorded — "
+                                f"consecutive={ss.consecutive_losses_today} pnl=${pnl:.2f}"
                             )
-                            if self._consecutive_losses_today >= self._loss_pause_threshold:
-                                self._loss_pause_until = now_utc + timedelta(
-                                    seconds=self._loss_pause_duration
-                                )
-                                pause_min = self._loss_pause_duration // 60
+                            if ss.is_loss_paused():
+                                pause_min = ss.loss_pause_duration // 60
                                 self.logger.warning(
-                                    f"[SessionManager] \u26a0\ufe0f LOSS PAUSE activated \u2014 "
-                                    f"{self._consecutive_losses_today} consecutive losses. "
-                                    f"Trading paused for {pause_min} minutes."
+                                    f"[SessionManager] LOSS PAUSE activated — "
+                                    f"{ss.consecutive_losses_today} consecutive losses. "
+                                    f"Paused for {pause_min} minutes."
                                 )
             except Exception as rb_err:
                 self.logger.warning(f"Session/reversal update failed (non-critical): {rb_err}")
