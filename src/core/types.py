@@ -316,6 +316,61 @@ class RiskMetrics:
 
 
 # ============================================================================
+# Session State — Carmack: group all mutable session state into one visible place
+# ============================================================================
+
+@dataclass
+class SessionState:
+    """
+    Carmack: every piece of mutable intra-day trading state in one place.
+
+    Instead of 10+ scattered fields on TradingSystem, this single object
+    makes state mutations visible and enables atomic reset at day boundary.
+    """
+    # Daily tracking
+    daily_wins_date: Optional[str] = None
+    max_daily_profit: float = 120.0
+
+    # Loss pause
+    consecutive_losses_today: int = 0
+    loss_pause_threshold: int = 2
+    loss_pause_duration: int = 1800  # seconds
+    loss_pause_until: Optional[datetime] = None
+
+    # Reversal buffer
+    last_close_time: Dict[str, datetime] = field(default_factory=dict)
+    reversal_buffer_min: int = 5
+
+    # Session lot multiplier (set by active session window)
+    current_lot_multiplier: float = 1.0
+
+    def reset_daily(self) -> None:
+        """Atomic daily reset — one call, all counters, no partial state."""
+        self.daily_wins_date = datetime.now(timezone.utc).strftime('%Y-%m-%d')
+        self.consecutive_losses_today = 0
+        self.loss_pause_until = None
+
+    def record_loss(self) -> None:
+        """Record consecutive loss; activate pause if threshold hit."""
+        self.consecutive_losses_today += 1
+        if self.consecutive_losses_today >= self.loss_pause_threshold:
+            from datetime import timedelta
+            self.loss_pause_until = datetime.now(timezone.utc) + timedelta(
+                seconds=self.loss_pause_duration
+            )
+
+    def record_win(self) -> None:
+        """Win resets consecutive loss counter."""
+        self.consecutive_losses_today = 0
+
+    def is_loss_paused(self) -> bool:
+        """Check if currently in loss pause cooldown."""
+        if self.loss_pause_until is None:
+            return False
+        return datetime.now(timezone.utc) < self.loss_pause_until
+
+
+# ============================================================================
 # System State Types
 # ============================================================================
 
