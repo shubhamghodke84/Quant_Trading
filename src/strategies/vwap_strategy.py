@@ -202,13 +202,10 @@ class VWAPStrategy(BaseStrategy):
         # ── ICT Kill Zone guard ───────────────────────────────────────────
         # London open (07–10 UTC) and NY open (12–15 UTC) are trend-driving
         # institutional kill zones. VWAP reversion has no edge here.
-        try:
-            bar_hour = bars.index[-1].hour
-            if any(s <= bar_hour < e for s, e in ((7, 10), (12, 15))):
-                self._log_no_signal(f"Kill zone (hour={bar_hour} UTC)")
-                return None
-        except AttributeError:
-            pass
+        bar_hour = self._get_bar_hour(bars)
+        if bar_hour is not None and any(s <= bar_hour < e for s, e in ((7, 10), (12, 15))):
+            self._log_no_signal(f"Kill zone (hour={bar_hour} UTC)")
+            return None
 
         # ── Regime ────────────────────────────────────────────────────────
         # Regime filter removed — the 2σ band + RSI/CCI extremes already
