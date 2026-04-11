@@ -23,6 +23,7 @@ from .momentum_strategy import MomentumStrategy
 from .kalman_regime_strategy import KalmanRegimeStrategy
 from .mini_medallion_strategy import MiniMedallionStrategy
 from .structure_break_retest import StructureBreakRetestStrategy
+from .supply_demand_strategy import SupplyDemandStrategy
 from ..core.types import Symbol, Signal
 
 
@@ -93,6 +94,13 @@ class StrategyManager:
                 self.strategies[symbol.ticker]['sbr'] = StructureBreakRetestStrategy(
                     symbol=symbol,
                     config=config.get('strategies', {}).get('sbr', {})
+                )
+
+            # Initialize Supply & Demand Zone strategy if enabled
+            if config.get('strategies', {}).get('supply_demand', {}).get('enabled', False):
+                self.strategies[symbol.ticker]['supply_demand'] = SupplyDemandStrategy(
+                    symbol=symbol,
+                    config=config.get('strategies', {}).get('supply_demand', {})
                 )
         
         from ..monitoring.logger import get_logger
