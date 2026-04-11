@@ -127,8 +127,9 @@ class KalmanRegimeStrategy(BaseStrategy):
         if not self.session_filter_enabled or not self.allowed_sessions:
             return True
 
-        current_time = bars.index[-1]
-        current_hour = current_time.hour
+        current_hour = self._get_bar_hour(bars)
+        if current_hour is None:
+            return True  # Cannot determine session — don't block trading
 
         for session in self.allowed_sessions:
             if isinstance(session, list) and len(session) == 2:
