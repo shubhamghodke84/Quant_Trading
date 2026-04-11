@@ -107,18 +107,61 @@ class DataEngine:
         results = {}
 
         for symbol_ticker, symbol in self.symbols.items():
-            # geohot: try local cache first — zero network dependency
+            # geohot priority chain: MT5 CopyRates → local cache → yfinance
+            # 1. MT5 direct (own your stack — zero external dependency)
+            loaded = self._preload_from_mt5(symbol_ticker, symbol, bars_count)
+            if loaded > 0:
+                results[symbol_ticker] = loaded
+                continue
+
+            # 2. Local CSV cache (written by the system itself)
             loaded = self._preload_from_cache(symbol_ticker, symbol, bars_count)
             if loaded > 0:
                 results[symbol_ticker] = loaded
                 continue
 
-            # Fallback: yfinance (external, may be slow or rate-limited)
+            # 3. yfinance (external, may be slow or rate-limited)
             loaded = self._preload_from_yfinance(symbol_ticker, symbol, bars_count)
             if loaded > 0:
                 results[symbol_ticker] = loaded
 
         return results
+
+    def _preload_from_mt5(self, symbol_ticker: str, symbol, bars_count: int) -> int:
+        """
+        geohot: fetch bars directly from MT5 via CopyRates.
+        Own the stack — no yfinance, no external deps.
+        """
+        try:
+            bars_data = self.connector.get_bars(
+                symbol=symbol_ticker, timeframe="M1", count=bars_count
+            )
+            if not bars_data:
+                return 0
+
+            loaded = 0
+            for b in bars_data:
+                ts = datetime.fromtimestamp(int(b['time']), tz=timezone.utc)
+                bar = Bar(
+                    symbol=symbol,
+                    timestamp=ts,
+                    open=Decimal(str(b['open'])),
+                    high=Decimal(str(b['high'])),
+                    low=Decimal(str(b['low'])),
+                    close=Decimal(str(b['close'])),
+                    volume=Decimal(str(b.get('volume', 0)))
+                )
+                self.candle_stores[symbol_ticker]['1m'].add_bar(bar)
+                loaded += 1
+
+            if loaded > 0:
+                logger.info(f"Preloaded {loaded} 1m bars for {symbol_ticker} from MT5 CopyRates")
+                self._build_higher_tf_from_1m(symbol_ticker)
+            return loaded
+
+        except Exception as e:
+            logger.debug(f"MT5 CopyRates preload failed for {symbol_ticker}: {e}")
+            return 0
 
     def _preload_from_cache(self, symbol_ticker: str, symbol, bars_count: int) -> int:
         """
