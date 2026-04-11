@@ -266,14 +266,19 @@ class SupplyDemandStrategy(BaseStrategy):
     # ------------------------------------------------------------------
 
     def _add_zone(self, zone: ZoneDict) -> None:
-        """Insert zone into the matching list, evicting the oldest when full."""
+        """Insert zone into the matching list, evicting the oldest when full.
+
+        Uses a while-loop so the list is correctly trimmed even if it has been
+        externally seeded to a size above max_active_zones (e.g. in tests).
+        """
         target = self._demand_zones if zone["direction"] == "demand" else self._supply_zones
 
-        # Oldest is at index 0 after sorting by formed_at_bar ascending
+        # Ensure oldest entries are first so pop(0) always removes the stalest
         target.sort(key=lambda z: z["formed_at_bar"])
 
-        if len(target) >= self.max_active_zones:
-            evicted = target.pop(0)  # Remove oldest
+        # Trim until there is room for one more entry
+        while len(target) >= self.max_active_zones:
+            evicted = target.pop(0)
             self.logger.debug(
                 "Zone evicted (list full)",
                 direction=evicted["direction"],
@@ -288,6 +293,7 @@ class SupplyDemandStrategy(BaseStrategy):
             high=f"{zone['high']:.2f}",
             low=f"{zone['low']:.2f}",
         )
+
 
     def _age_and_expire_zones(self, current_close: float) -> None:
         """Increment zone ages and remove expired or consumed zones.
