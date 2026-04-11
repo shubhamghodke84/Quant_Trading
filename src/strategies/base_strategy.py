@@ -37,6 +37,31 @@ def _parse_ml_regime(regime_str: Optional[str]) -> Optional[MarketRegime]:
         return None
 
 
+def _bar_hour(index_value) -> Optional[int]:
+    """
+    Extract the UTC hour (0-23) from a bar index value.
+
+    The MT5 bridge sometimes delivers the DataFrame with a plain integer
+    Unix-timestamp index instead of a proper DatetimeIndex.  This helper
+    handles both cases so callers never crash with
+    ``AttributeError: 'int' object has no attribute 'hour'``.
+
+    Args:
+        index_value: The last element of ``bars.index`` — either a
+            ``pd.Timestamp`` / ``datetime`` that already has ``.hour``,
+            or a numeric Unix timestamp (seconds since epoch).
+
+    Returns:
+        Integer hour in [0, 23], or None when the value cannot be parsed.
+    """
+    if hasattr(index_value, 'hour'):
+        return int(index_value.hour)
+    try:
+        return int(pd.Timestamp(index_value, unit='s', tz='UTC').hour)
+    except Exception:
+        return None
+
+
 class BaseStrategy(ABC):
     """
     Abstract base class for all trading strategies.
@@ -164,6 +189,24 @@ class BaseStrategy(ABC):
         
         return signal
     
+    @staticmethod
+    def _get_bar_hour(bars: pd.DataFrame) -> Optional[int]:
+        """
+        Return the UTC hour of the most recent bar.
+
+        Delegates to the module-level ``_bar_hour`` helper so that all
+        strategies share one robust timestamp-parsing path.
+
+        Args:
+            bars: Strategy bar DataFrame whose index may be a
+                DatetimeIndex or a raw integer Unix-timestamp index.
+
+        Returns:
+            Integer hour in [0, 23], or None when the index value cannot
+            be interpreted as a timestamp.
+        """
+        return _bar_hour(bars.index[-1])
+
     def _log_no_signal(self, reason: str) -> None:
         """Log why no signal was generated (INFO so it's visible in normal logs)."""
         import re
